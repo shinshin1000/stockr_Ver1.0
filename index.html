@@ -502,6 +502,7 @@ function stopScanner() {
 // ============================================================
 function go(screen, params = {}) {
   stopScanner();
+  S.saving = false; // 画面移動時に必ずリセット
   Object.assign(S, params);
   S.screen = screen;
   render();
@@ -553,10 +554,23 @@ function renderTopbar() {
   const main = S.screen === 'home' || S.screen === 'scan' || S.screen === 'history' || S.screen === 'settings'
     ? `<span class="topbar-logo">STOCKR</span>` : '';
   const title = !['home'].includes(S.screen) ? `<span class="topbar-title">${titles[S.screen]||''}</span>` : '';
-  const sub = S.screen === 'home' ? `<span class="topbar-sub">👤 ${esc(S.user)}</span>` : '';
+
   if (S.screen === 'action' && S.activeProduct) {
     return `${back}<span class="topbar-title" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(S.activeProduct.name)}</span>`;
   }
+  // ホーム画面：在庫資産をトップバーに常時表示
+  if (S.screen === 'home') {
+    const prods = S.cache?.ok ? buildProducts(S.cache) : [];
+    const summary = calcPriceSummary(prods);
+    const right = summary
+      ? `<div style="text-align:right;line-height:1.2;margin-left:auto;">
+           <div style="font-size:10px;color:var(--muted);">在庫資産</div>
+           <div style="font-size:15px;font-weight:800;color:var(--accent);">¥${Math.round(summary.total).toLocaleString()}</div>
+         </div>`
+      : `<span class="topbar-sub">👤 ${esc(S.user)}</span>`;
+    return `${main}${right}`;
+  }
+  const sub = `<span class="topbar-sub">👤 ${esc(S.user)}</span>`;
   return `${back}${main}${title}${sub}`;
 }
 
@@ -661,21 +675,7 @@ function paintHomeList() {
   });
 
   const low = prods.filter(p=>p.isLow);
-  const summary = calcPriceSummary(prods);
   let html = '';
-
-  // 価格サマリーカード
-  if (summary) {
-    html += `<div class="card" style="margin:8px 12px 4px;padding:12px 16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div>
-          <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px;">在庫資産（価格登録済 ${summary.count}/${summary.total_items}件）</div>
-          <div style="font-size:24px;font-weight:800;color:var(--accent);">¥${Math.round(summary.total).toLocaleString()}</div>
-        </div>
-        <div style="font-size:28px;">💰</div>
-      </div>
-    </div>`;
-  }
 
   if (low.length) {
     html += `<div class="alert-banner" id="ab">
@@ -765,11 +765,14 @@ function renderScan() {
   return `
     <div style="padding:14px;">
       <div id="qr-reader" style="width:100%;border-radius:var(--radius);overflow:hidden;"></div>
-      <p style="font-size:12px;color:var(--muted);text-align:center;padding:14px 0 10px;">— または手動入力 —</p>
-      <div style="display:flex;gap:8px;">
-        <input class="form-input" id="manual-bc" type="text" placeholder="バーコード番号を入力" inputmode="numeric" style="flex:1;">
-        <button class="btn btn-primary" id="manual-ok" style="width:auto;padding:12px 18px;font-size:15px;">検索</button>
+      <div style="margin-top:12px;background:var(--surface);border-radius:var(--radius);padding:14px;">
+        <p style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:10px;">— または数字を直接入力 —</p>
+        <div style="display:flex;gap:8px;">
+          <input class="form-input" id="manual-bc" type="text" placeholder="バーコード番号" inputmode="numeric" style="flex:1;">
+          <button class="btn btn-primary" id="manual-ok" style="width:auto;padding:12px 18px;font-size:15px;">検索</button>
+        </div>
       </div>
+      <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px;">📱 カメラをバーコードに近づけて、横向きで読み取ると認識しやすいです</p>
     </div>
   `;
 }
@@ -782,7 +785,20 @@ function bindScan() {
 function initScanner() {
   if (typeof Html5QrcodeScanner === 'undefined') return;
   try {
-    const sc = new Html5QrcodeScanner('qr-reader', {fps:10, qrbox:{width:260,height:140}}, false);
+    // fps高め・スキャンエリア広めで認識率アップ
+    const sc = new Html5QrcodeScanner('qr-reader', {
+      fps: 15,
+      qrbox: { width: 300, height: 120 },
+      aspectRatio: 1.5,
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.QR_CODE,
+      ]
+    }, false);
     sc.render(decoded => { sc.clear().catch(()=>{}); S.scanner=null; handleBarcode(decoded); });
     S.scanner = sc;
   } catch(e) { console.warn('scanner init error', e); }
