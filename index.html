@@ -1213,4 +1213,87 @@ function paintHistory() {
 // ============================================================
 // SETTINGS SCREEN
 // ============================================================
-function renderSett
+function renderSettings() {
+  const isDemo = S.url==='DEMO';
+  return `
+    <div style="padding:16px;">
+      <div class="card">
+        <div class="card-title">ユーザー設定</div>
+        <div class="form-group">
+          <label class="form-label">ユーザー名</label>
+          <input class="form-input" id="st-user" type="text" value="${esc(S.user)}" maxlength="20">
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">API 接続</div>
+        <div class="form-group">
+          <label class="form-label">GAS Web App URL</label>
+          <input class="form-input" id="st-url" type="url" value="${isDemo?'':esc(S.url)}" placeholder="https://script.google.com/...">
+          <p class="form-hint">変更するとキャッシュがクリアされます</p>
+        </div>
+        <button class="btn btn-secondary" id="st-test">🔌 接続テスト</button>
+      </div>
+
+      <button class="btn btn-primary" id="st-save" style="margin-top:4px;">設定を保存</button>
+
+      <div class="divider" style="margin:20px 0;"></div>
+
+      <div class="card">
+        <div class="card-title">データ管理</div>
+        <button class="btn btn-secondary" id="st-refresh" style="margin-bottom:8px;">🔄 データを再読み込み</button>
+        <button class="btn btn-ghost" id="st-reset">⚠️ アプリをリセット（設定を消去）</button>
+      </div>
+
+      <p style="text-align:center;font-size:11px;color:var(--muted);margin-top:24px;">STOCKR v1.0 ${isDemo?'— デモモード':''}</p>
+    </div>
+  `;
+}
+function bindSettings() {
+  document.getElementById('st-save').addEventListener('click', () => {
+    const user = document.getElementById('st-user').value.trim();
+    const url  = document.getElementById('st-url').value.trim();
+    if (!user) { toast('ユーザー名を入力してください','err'); return; }
+    S.user=user; S.url=url||'DEMO';
+    localStorage.setItem('stockr_user',user);
+    localStorage.setItem('stockr_url', S.url);
+    S.cache=null; S.cacheTime=0;
+    if (S.url==='DEMO') { S.cache=makeDemoData(); S.cacheTime=Date.now(); }
+    toast('設定を保存しました');
+  });
+  document.getElementById('st-test').addEventListener('click', async () => {
+    const url = document.getElementById('st-url').value.trim();
+    if (!url) { toast('URL を入力してください','err'); return; }
+    try {
+      const res = await fetch(`${url}?action=ping`);
+      const data = await res.json();
+      if (data.ok) toast('✅ 接続成功: '+data.message);
+      else toast('⚠️ 応答あり: '+JSON.stringify(data),'info');
+    } catch(e) { toast('❌ 接続失敗: '+e.message,'err'); }
+  });
+  document.getElementById('st-refresh').addEventListener('click', async () => {
+    S.cache=null; S.cacheTime=0;
+    if (S.url==='DEMO') { S.cache=makeDemoData(); S.cacheTime=Date.now(); toast('デモデータをリセットしました'); return; }
+    const d=await getAllData(true);
+    if (d?.ok) { S.cache=d; toast('データを再読み込みしました'); }
+    else toast(d?.error||'エラー','err');
+  });
+  document.getElementById('st-reset').addEventListener('click', () => {
+    if (!confirm('アプリの設定をリセットしますか？\n（スプレッドシートのデータは削除されません）')) return;
+    localStorage.clear();
+    S.url=''; S.user=''; S.cache=null;
+    render();
+  });
+}
+
+// ============================================================
+// INIT
+// ============================================================
+render();
+// バックグラウンドで先読み（初回の遅さを緩和）
+if (S.url && S.url !== 'DEMO') {
+  getAllData().then(d => { if (d?.ok) S.cache = d; });
+}
+</script>
+</body>
+</html>
