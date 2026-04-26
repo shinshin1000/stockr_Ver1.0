@@ -361,6 +361,7 @@ const S = {
   // Add/edit
   editProduct: null,
   preBarcode:  '',
+  preName:     '',
   // Cache
   cache:     null,
   cacheTime: 0,
@@ -762,19 +763,55 @@ async function handleBarcode(bc) {
     showUnknownBarcode(bc);
   }
 }
-function showUnknownBarcode(bc) {
+
+// JAN コードから商品名を自動取得（Open Food Facts）
+async function fetchProductName(bc) {
+  try {
+    const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${bc}.json`);
+    const data = await res.json();
+    if (data.status === 1 && data.product) {
+      const p = data.product;
+      // 日本語名 → 英語名 → ブランド名の順で取得
+      return p.product_name_ja || p.product_name || p.brands || '';
+    }
+  } catch(e) {}
+  return '';
+}
+
+async function showUnknownBarcode(bc) {
   const prods = buildProducts(S.cache||{});
   const ov = document.createElement('div'); ov.className='overlay';
+
+  // まず「検索中」で表示
   ov.innerHTML=`<div class="modal"><div class="modal-handle"></div>
     <h2>🔍 未登録のバーコード</h2>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">バーコード: <code style="color:var(--accent)">${esc(bc)}</code></p>
-    <p style="font-size:14px;margin-bottom:18px;">このバーコードは登録されていません。</p>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">バーコード: <code style="color:var(--accent)">${esc(bc)}</code></p>
+    <div id="jan-result" style="margin-bottom:16px;">
+      <div class="loading" style="padding:16px 0;"><div class="spinner"></div>商品名を検索中…</div>
+    </div>
     <button class="btn btn-primary" id="ob-new">＋ 新しい商品として登録</button>
     <button class="btn btn-secondary" id="ob-link">🔗 既存の商品に紐付ける</button>
     <button class="btn btn-secondary" id="ob-cancel">キャンセル</button>
   </div>`;
   document.body.appendChild(ov);
-  document.getElementById('ob-new').addEventListener('click', () => { ov.remove(); go('add',{editProduct:null,preBarcode:bc}); });
+
+  // 商品名を非同期で取得して表示
+  const name = await fetchProductName(bc);
+  const janResult = document.getElementById('jan-result');
+  if (janResult) {
+    if (name) {
+      janResult.innerHTML = `
+        <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:4px;">
+          <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">✅ 商品名が見つかりました</div>
+          <div style="font-size:16px;font-weight:600;">${esc(name)}</div>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:4px;">登録時に自動で入力されます（変更も可能）</p>`;
+    } else {
+      janResult.innerHTML = `<p style="font-size:13px;color:var(--muted);margin-bottom:4px;">データベースに商品情報が見つかりませんでした。手動で入力してください。</p>`;
+    }
+  }
+
+  document.getElementById('ob-new').addEventListener('click', () => { ov.remove(); go('add',{editProduct:null, preBarcode:bc, preName:name}); });
   document.getElementById('ob-link').addEventListener('click', () => { ov.remove(); showLinkBarcode(bc, prods); });
   document.getElementById('ob-cancel').addEventListener('click', () => ov.remove());
 }
@@ -956,7 +993,7 @@ function renderAdd() {
     <div style="padding:16px;">
       <div class="form-group">
         <label class="form-label">商品名 <span class="form-req">*</span></label>
-        <input class="form-input" id="a-name" type="text" placeholder="例：牛乳 1L" value="${esc(p?.name||'')}">
+        <input class="form-input" id="a-name" type="text" placeholder="例：牛乳 1L" value="${esc(p?.name||S.preName||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">単位</label>
@@ -1187,6 +1224,10 @@ function bindSettings() {
 // INIT
 // ============================================================
 render();
+// バックグラウンドで先読み（初回の遅さを緩和）
+if (S.url && S.url !== 'DEMO') {
+  getAllData().then(d => { if (d?.ok) S.cache = d; });
+}
 </script>
 </body>
 </html>
