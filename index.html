@@ -132,7 +132,7 @@ input { font-family: inherit; }
 /* ==================== SEARCH BAR ==================== */
 .search-wrap {
   display: flex; gap: 8px; padding: 8px 12px 6px;
-  background: var(--bg); position: sticky; top: 52px; z-index: 8;
+  background: var(--bg); position: sticky; top: 0; z-index: 8;
   border-bottom: 1px solid var(--border);
 }
 .search-input {
@@ -363,6 +363,7 @@ const S = {
   preBarcode:  '',
   preName:     '',
   saving: false,
+  quickLock: {}, // ＋/－ボタンの連続クリック防止
   // Cache
   cache:     null,
   cacheTime: 0,
@@ -641,6 +642,7 @@ function renderHome() {
     <div class="search-wrap">
       <input class="search-input" id="q" type="search" placeholder="🔍 商品名で検索..." value="${esc(S.query)}">
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
+      <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🛒</button>
     </div>
     <div id="home-list"><div class="loading"><div class="spinner"></div>読み込み中…</div></div>
     <button class="fab" id="fab-add">＋</button>
@@ -654,10 +656,103 @@ async function bindHome() {
   document.getElementById('fab-add').addEventListener('click', () => go('add', {editProduct:null, preBarcode:''}));
   document.getElementById('q').addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
   document.getElementById('sort-btn').addEventListener('click', showSortModal);
+  document.getElementById('shop-list-btn').addEventListener('click', showShoppingList);
   // キャッシュがあれば即表示、バックグラウンドで最新を取得
   if (S.cache) { paintHomeList(); }
   getAllData().then(d => { if (d?.ok) { S.cache = d; paintHomeList(); } });
 }
+// 登録済み店舗名の一覧を取得
+function getUniqueStores() {
+  const stores = new Set();
+  (S.cache?.barcodes || []).forEach(b => { if (b.store_name) stores.add(String(b.store_name)); });
+  return [...stores].sort();
+}
+
+// 履歴から残り日数を推定（出庫ペースをもとに計算）
+function calcDaysRemaining(p) {
+  const hist = (S.cache?.history || [])
+    .filter(h => String(h.group_id) === String(p.group_id) && h.action === 'out')
+    .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (hist.length < 2) return null;
+  const first = new Date(hist[0].timestamp);
+  const last  = new Date(hist[hist.length-1].timestamp);
+  const days  = (last - first) / 86400000;
+  if (days < 1) return null;
+  const totalOut = hist.reduce((s,h) => s + (Number(h.qty)||0), 0);
+  const perDay = totalOut / days;
+  if (perDay <= 0) return null;
+  return Math.floor(p.qty / perDay);
+}
+
+// 商品ごとの店舗別価格一覧
+function renderPriceHistory(p) {
+  const bcs = (S.cache?.barcodes || []).filter(b => String(b.group_id) === String(p.group_id) && b.price && Number(b.price) > 0);
+  if (!bcs.length) return '';
+  return `
+    <div style="margin-top:8px;">
+      <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🏪 店舗別価格</div>
+      ${bcs.map(b => {
+        const up = (p.volume > 0) ? (Number(b.price) / p.volume).toFixed(1) : null;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+          <span style="color:var(--text);">${esc(b.store_name||'—')}</span>
+          <span>
+            <span style="color:var(--accent);font-weight:700;">¥${Number(b.price).toLocaleString()}</span>
+            ${up ? `<span style="color:var(--muted);font-size:11px;margin-left:6px;">¥${up}/${esc(p.volume_unit||p.unit)}</span>` : ''}
+          </span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+// 店舗別買い物リスト
+function showShoppingList() {
+  const prods = S.cache?.ok ? buildProducts(S.cache) : [];
+  const barcodes = S.cache?.barcodes || [];
+
+  // 店舗ごとに商品をグループ化
+  const storeMap = {};
+  barcodes.forEach(b => {
+    const store = b.store_name ? String(b.store_name) : '（店舗未設定）';
+    if (!storeMap[store]) storeMap[store] = [];
+    const prod = prods.find(p => String(p.group_id) === String(b.group_id));
+    if (prod && !storeMap[store].find(x => x.group_id === prod.group_id)) {
+      storeMap[store].push({ ...prod, storePrice: b.price });
+    }
+  });
+
+  const content = Object.entries(storeMap).sort(([a],[b]) => a.localeCompare(b,'ja')).map(([store, items]) => {
+    const sorted = [...items].sort((a,b) => a.qty - b.qty); // 在庫少ない順
+    return `
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:700;color:var(--accent);font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+          🏪 ${esc(store)}
+          <span style="font-size:11px;color:var(--muted);font-weight:400;">${sorted.length}品</span>
+        </div>
+        ${sorted.map(p => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface2);border-radius:9px;margin-bottom:5px;border:1.5px solid ${p.isLow ? 'var(--warn)' : 'transparent'};">
+            <div>
+              <div style="font-size:14px;font-weight:600;">${esc(p.name)}${p.isLow ? '<span class="alert-badge">少</span>' : ''}</div>
+              <div style="font-size:11px;color:var(--muted);">在庫: ${p.qty}${esc(p.unit)}${p.storePrice ? ` · ¥${Number(p.storePrice).toLocaleString()}` : ''}</div>
+            </div>
+            ${p.isLow ? '<span style="font-size:18px;">🛒</span>' : '<span style="font-size:18px;opacity:0.3;">✓</span>'}
+          </div>`).join('')}
+      </div>`;
+  }).join('');
+
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
+    <h2>🛒 店舗別買い物リスト</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">🛒マークは在庫が少ない商品です</p>
+    <div style="max-height:62vh;overflow-y:auto;">
+      ${content || '<div class="empty" style="padding:32px 0;"><div class="ei">🏪</div><p>店舗情報が登録されていません<br>商品にバーコードと店舗名を登録してください</p></div>'}
+    </div>
+    <button class="btn btn-secondary" id="sl-close" style="margin-top:12px;">閉じる</button>
+  </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('sl-close').addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+}
+
 function paintHomeList() {
   const el = document.getElementById('home-list'); if (!el) return;
   const data = S.cache;
@@ -695,7 +790,9 @@ function paintHomeList() {
             ${p.latestPrice ? `¥${p.latestPrice.toLocaleString()}` : ''}
             ${p.unitPrice ? ` · <span style="color:var(--accent);">¥${p.unitPrice.toFixed(1)}/${esc(p.volume_unit||p.unit)}</span>` : ''}
             ${p.stockValue ? ` · 計¥${Math.round(p.stockValue).toLocaleString()}` : ''}
-            ${(!p.latestPrice) ? `しきい値: ${p.alert_threshold}${esc(p.unit)}` : ''} · ${relDate(p.updated_at)}
+            ${(!p.latestPrice) ? `しきい値: ${p.alert_threshold}${esc(p.unit)}` : ''}
+            ${(() => { const d = calcDaysRemaining(p); return d !== null ? ` · <span style="color:var(--warn);">あと約${d}日</span>` : ''; })()}
+             · ${relDate(p.updated_at)}
           </div>
         </div>
         <div class="pi-qty-wrap">
@@ -724,25 +821,38 @@ function paintHomeList() {
   document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; document.getElementById('q').value=''; paintHomeList(); });
 }
 async function quickStock(p, action, qty) {
-  if (S.url==='DEMO') {
-    const inv = S.cache.inventory.find(r=>r.group_id===p.group_id);
-    if (inv) {
-      if (action==='in')  inv.qty += qty;
-      if (action==='out') inv.qty = Math.max(0, inv.qty-qty);
-      inv.updated_at = new Date().toLocaleString('ja-JP');
-    }
-    S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:'', action, qty, after_qty:inv?.qty??0, store_name:'', price:'', user:S.user});
-    toast(`${p.name}: ${action==='in'?'+':'-'}${qty}${p.unit}`);
-    paintHomeList(); return;
-  }
+  if (S.quickLock[p.group_id]) return; // 連続クリック防止
+  S.quickLock[p.group_id] = true;
+
+  // ボタンを一時的に暗くして無効化
+  const row = document.querySelector(`.product-item[data-gid="${p.group_id}"]`);
+  const btns = row?.querySelectorAll('.qbtn');
+  btns?.forEach(b => { b.disabled = true; b.style.opacity = '0.3'; });
+
   try {
-    const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name, barcode:'', move:action, qty, user:S.user});
-    if (res.ok) {
+    if (S.url==='DEMO') {
+      const inv = S.cache.inventory.find(r=>r.group_id===p.group_id);
+      if (inv) {
+        if (action==='in')  inv.qty += qty;
+        if (action==='out') inv.qty = Math.max(0, inv.qty-qty);
+        inv.updated_at = new Date().toLocaleString('ja-JP');
+      }
+      S.cache.history = S.cache.history || [];
+      S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:'', action, qty, after_qty:inv?.qty??0, store_name:'', price:'', user:S.user});
       toast(`${p.name}: ${action==='in'?'+':'-'}${qty}${p.unit}`);
-      const fresh = await getAllData(true); if (fresh?.ok) S.cache = fresh;
       paintHomeList();
-    } else toast(res.error||'エラー','err');
+    } else {
+      const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name, barcode:'', move:action, qty, user:S.user});
+      if (res.ok) {
+        toast(`${p.name}: ${action==='in'?'+':'-'}${qty}${p.unit}`);
+        const fresh = await getAllData(true); if (fresh?.ok) S.cache = fresh;
+        paintHomeList();
+      } else toast(res.error||'エラー','err');
+    }
   } catch(e) { toast('通信エラー: '+e.message,'err'); }
+
+  S.quickLock[p.group_id] = false;
+  btns?.forEach(b => { b.disabled = false; b.style.opacity = ''; });
 }
 function showSortModal() {
   const opts = [{id:'name',label:'名前順'},{id:'qty_asc',label:'在庫少ない順'},{id:'qty_desc',label:'在庫多い順'},{id:'updated',label:'最終更新順'}];
@@ -937,6 +1047,8 @@ function renderAction() {
       <div class="divider"></div>
       <div id="act-extras"></div>
 
+      <div id="act-price-hist"></div>
+
       <div class="divider"></div>
       <div class="product-actions-row">
         <span style="font-size:12px;color:var(--muted);margin-right:auto;">この商品：</span>
@@ -948,10 +1060,12 @@ function renderAction() {
 }
 function renderExtras() {
   if (S.actionMode !== 'in') return '<p style="font-size:12px;color:var(--muted);text-align:center;">（店舗・価格の入力は入庫時のみ）</p>';
+  const stores = getUniqueStores();
   return `
     <div class="form-group">
       <label class="form-label">店舗名（任意）</label>
-      <input class="form-input" id="store-in" type="text" placeholder="コープ、スーパーなど" value="${esc(S.scannedStore)}">
+      <input class="form-input" id="store-in" type="text" list="store-datalist" placeholder="コープ、スーパーなど" value="${esc(S.scannedStore)}" autocomplete="off">
+      ${stores.length ? `<datalist id="store-datalist">${stores.map(s=>`<option value="${esc(s)}">`).join('')}</datalist>` : ''}
     </div>
     <div class="form-group">
       <label class="form-label">購入価格（任意）</label>
@@ -985,6 +1099,9 @@ function bindAction() {
   document.getElementById('del-prod').addEventListener('click', () => confirmDelete(p));
 
   document.getElementById('act-extras').innerHTML = renderExtras();
+  const ph = renderPriceHistory(p);
+  document.getElementById('act-price-hist').innerHTML = ph
+    ? `<div style="padding:0 2px 8px;">${ph}</div>` : '';
 }
 async function doStockAction(p) {
   const qty = parseInt(S.actionInput) || 0;
