@@ -410,15 +410,25 @@ function buildProducts(data) {
   (data.barcodes || []).forEach(b => {
     if (b.price && Number(b.price) > 0) priceMap[b.group_id] = Number(b.price);
   });
+  // 購入履歴からも最新の入庫価格・店舗を補完（バーコードにない場合）
+  const histPriceMap = {}, histStoreMap = {};
+  (data.history || [])
+    .filter(h => h.action === 'in' && h.price && Number(h.price) > 0)
+    .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp))
+    .forEach(h => {
+      histPriceMap[h.group_id] = Number(h.price);
+      if (h.store_name) histStoreMap[h.group_id] = h.store_name;
+    });
   return (data.products || []).map(p => {
     const inv = invMap[p.group_id] || {};
     const qty = Number(inv.qty) || 0;
-    const thr = Number(inv.alert_threshold) || 5;
-    const latestPrice = priceMap[p.group_id] || 0;
+    const thr = (inv.alert_threshold != null && inv.alert_threshold !== '') ? Number(inv.alert_threshold) : 5;
+    const latestPrice = priceMap[p.group_id] || histPriceMap[p.group_id] || 0;
+    const latestStore = histStoreMap[p.group_id] || '';
     const volume = Number(p.volume) || 0;
     const unitPrice = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
     const stockValue = latestPrice > 0 ? qty * latestPrice : null;
-    return { ...p, qty, alert_threshold: thr, updated_at: inv.updated_at || '', isLow: qty <= thr, latestPrice, volume, unitPrice, stockValue };
+    return { ...p, qty, alert_threshold: thr, updated_at: inv.updated_at || '', isLow: qty <= thr, latestPrice, latestStore, volume, unitPrice, stockValue };
   });
 }
 
@@ -443,8 +453,10 @@ function makeDemoData() {
       { group_id: 'p4', name: 'ゴミ袋 45L',        unit: '枚',  created_at: '2026/03/15' },
     ],
     barcodes: [
-      { barcode: '4901234567890', group_id: 'p1', store_name: 'コープ', price: 188, memo: '', created_at: '2026/01/10' },
+      { barcode: '4901234567890', group_id: 'p1', store_name: 'コープ',  price: 188, memo: '', created_at: '2026/01/10' },
+      { barcode: '4901234567891', group_id: 'p1', store_name: 'ロピア',  price: 178, memo: '', created_at: '2026/01/10' },
       { barcode: '4909999000001', group_id: 'p3', store_name: 'ドラッグストア', price: 298, memo: '', created_at: '2026/02/01' },
+      { barcode: '4909999000002', group_id: 'p3', store_name: 'Amazon', price: 276, memo: '', created_at: '2026/02/01' },
     ],
     inventory: [
       { group_id: 'p1', qty: 3, alert_threshold: 5, updated_at: '2026/04/26 09:00' },
@@ -453,10 +465,27 @@ function makeDemoData() {
       { group_id: 'p4', qty: 30, alert_threshold: 10, updated_at: '2026/04/20 12:00' },
     ],
     history: [
-      { timestamp: '2026/04/26 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in', qty: 6, after_qty: 3, store_name: 'コープ', price: 188, user: 'しんしん' },
-      { timestamp: '2026/04/25 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 12, store_name: '', price: '', user: 'ケイコ' },
+      // 牛乳 1L — 複数店舗・定期購入
+      { timestamp: '2026/04/26 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 9,  store_name: 'コープ',  price: 188, user: 'しんしん' },
+      { timestamp: '2026/04/22 18:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: 3,  store_name: '',        price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/15 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 5,  store_name: 'ロピア',  price: 178, user: 'しんしん' },
+      { timestamp: '2026/04/10 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 3, after_qty: -1, store_name: '',        price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/04 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 2,  store_name: 'コープ',  price: 192, user: 'しんしん' },
+      { timestamp: '2026/03/28 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: -4, store_name: '',        price: '',  user: 'ケイコ' },
+      // トイレットペーパー — 複数店舗比較
+      { timestamp: '2026/04/25 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 12, store_name: '',         price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/10 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 13, store_name: '',         price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/01 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 14, store_name: 'トライアル', price: 498, user: 'しんしん' },
+      { timestamp: '2026/03/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 12, store_name: 'ドラモリ',   price: 468, user: 'しんしん' },
+      { timestamp: '2026/02/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 0,  store_name: '',         price: '',  user: 'ケイコ' },
+      // 洗剤（詰め替え） — Amazon vs ドラッグストア比較
       { timestamp: '2026/04/24 15:30', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'ドラッグストア', price: 298, user: 'しんしん' },
+      { timestamp: '2026/03/20 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'Amazon',         price: 276, user: 'しんしん' },
+      { timestamp: '2026/02/18 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '',              action: 'out', qty: 2, after_qty: 0, store_name: '',               price: '',  user: 'ケイコ' },
+      // ゴミ袋
       { timestamp: '2026/04/20 12:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'set', qty: 30, after_qty: 30, store_name: '', price: '', user: 'しんしん' },
+      { timestamp: '2026/04/19 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 28, store_name: '', price: '', user: 'ケイコ' },
+      { timestamp: '2026/04/12 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 30, store_name: '', price: '', user: 'ケイコ' },
     ],
   };
 }
@@ -668,83 +697,184 @@ function getUniqueStores() {
   return [...stores].sort();
 }
 
-// 履歴から残り日数を推定（出庫ペースをもとに計算）
-function calcDaysRemaining(p) {
-  const hist = (S.cache?.history || [])
-    .filter(h => String(h.group_id) === String(p.group_id) && h.action === 'out')
-    .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
-  if (hist.length < 2) return null;
-  const first = new Date(hist[0].timestamp);
-  const last  = new Date(hist[hist.length-1].timestamp);
-  const days  = (last - first) / 86400000;
-  if (days < 1) return null;
-  const totalOut = hist.reduce((s,h) => s + (Number(h.qty)||0), 0);
-  const perDay = totalOut / days;
-  if (perDay <= 0) return null;
-  return Math.floor(p.qty / perDay);
+// 消費統計を計算（出庫ベース + 入庫サイクルベース）
+function calcConsumptionStats(p) {
+  const hist = (S.cache?.history || []).filter(h => String(h.group_id) === String(p.group_id));
+  const outHist = hist.filter(h => h.action === 'out').sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const inHist  = hist.filter(h => h.action === 'in').sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  let daysFromOut = null, daysFromIn = null, avgDaysPerUnit = null, purchaseCycleDays = null;
+
+  // 出庫ペースから計算（より信頼性が高い）
+  if (outHist.length >= 2) {
+    const days = (new Date(outHist[outHist.length-1].timestamp) - new Date(outHist[0].timestamp)) / 86400000;
+    const totalOut = outHist.reduce((s,h) => s + (Number(h.qty)||0), 0);
+    if (days >= 1 && totalOut > 0) {
+      const perDay = totalOut / days;
+      daysFromOut = Math.floor(p.qty / perDay);
+      avgDaysPerUnit = 1 / perDay;
+    }
+  }
+
+  // 入庫サイクルから消費速度を推定（出庫記録がない場合のフォールバック）
+  if (inHist.length >= 2) {
+    const intervals = [];
+    for (let i = 1; i < inHist.length; i++) {
+      const iv = (new Date(inHist[i].timestamp) - new Date(inHist[i-1].timestamp)) / 86400000;
+      if (iv > 0) intervals.push(iv);
+    }
+    if (intervals.length) {
+      purchaseCycleDays = intervals.reduce((s,d) => s+d, 0) / intervals.length;
+      const totalDays = (new Date(inHist[inHist.length-1].timestamp) - new Date(inHist[0].timestamp)) / 86400000;
+      const totalBought = inHist.reduce((s,h) => s + (Number(h.qty)||0), 0);
+      const consumed = totalBought - (Number(inHist[inHist.length-1].qty)||0);
+      if (totalDays > 0 && consumed > 0) {
+        const perDayIn = consumed / totalDays;
+        daysFromIn = Math.floor(p.qty / perDayIn);
+        if (avgDaysPerUnit === null) avgDaysPerUnit = 1 / perDayIn;
+      }
+    }
+  }
+
+  const bestDays = daysFromOut ?? daysFromIn;
+  return { daysFromOut, daysFromIn, avgDaysPerUnit, purchaseCycleDays, bestDays };
 }
 
-// 商品ごとの店舗別価格一覧
+// 後方互換
+function calcDaysRemaining(p) { return calcConsumptionStats(p).bestDays; }
+
+// 商品ごとの店舗別価格履歴を集計（購入履歴 + バーコードテーブル）
+function calcStorePrices(p) {
+  const storeMap = {};
+  // 購入履歴から集計（より新鮮）
+  (S.cache?.history || [])
+    .filter(h => String(h.group_id) === String(p.group_id) && h.action === 'in' && h.store_name && Number(h.price) > 0)
+    .forEach(h => {
+      const store = h.store_name, price = Number(h.price);
+      if (!storeMap[store]) storeMap[store] = { prices: [], latestPrice: 0, latestDate: '' };
+      storeMap[store].prices.push(price);
+      if (!storeMap[store].latestDate || new Date(h.timestamp) > new Date(storeMap[store].latestDate)) {
+        storeMap[store].latestPrice = price;
+        storeMap[store].latestDate = h.timestamp;
+      }
+    });
+  // バーコードテーブルで補完（履歴にない店舗）
+  (S.cache?.barcodes || [])
+    .filter(b => String(b.group_id) === String(p.group_id) && b.store_name && Number(b.price) > 0)
+    .forEach(b => {
+      const store = b.store_name, price = Number(b.price);
+      if (!storeMap[store]) storeMap[store] = { prices: [price], latestPrice: price, latestDate: b.created_at||'' };
+    });
+  return Object.entries(storeMap).map(([store, d]) => {
+    const min = Math.min(...d.prices), max = Math.max(...d.prices);
+    const avg = d.prices.reduce((s,x) => s+x, 0) / d.prices.length;
+    const unitPrice = (Number(p.volume) > 0 && min > 0) ? min / Number(p.volume) : null;
+    return { store, min, max, avg, latestPrice: d.latestPrice, count: d.prices.length, unitPrice };
+  }).sort((a,b) => a.min - b.min);
+}
+
+// 商品ごとの店舗別価格比較（購入履歴ベース）
 function renderPriceHistory(p) {
-  const bcs = (S.cache?.barcodes || []).filter(b => String(b.group_id) === String(p.group_id) && b.price && Number(b.price) > 0);
-  if (!bcs.length) return '';
+  const storePrices = calcStorePrices(p);
+  if (!storePrices.length) return '';
   return `
     <div style="margin-top:8px;">
-      <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🏪 店舗別価格</div>
-      ${bcs.map(b => {
-        const up = (p.volume > 0) ? (Number(b.price) / p.volume).toFixed(1) : null;
+      <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🏪 店舗別価格比較</div>
+      ${storePrices.map((s, i) => {
+        const isCheapest = i === 0;
+        const up = s.unitPrice ? `¥${s.unitPrice.toFixed(1)}/${esc(p.volume_unit||p.unit)}` : null;
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
-          <span style="color:var(--text);">${esc(b.store_name||'—')}</span>
-          <span>
-            <span style="color:var(--accent);font-weight:700;">¥${Number(b.price).toLocaleString()}</span>
-            ${up ? `<span style="color:var(--muted);font-size:11px;margin-left:6px;">¥${up}/${esc(p.volume_unit||p.unit)}</span>` : ''}
-          </span>
+          <div>
+            <div style="color:var(--text);">${isCheapest ? '🥇 ' : ''}${esc(s.store)}</div>
+            ${s.count > 1 ? `<div style="font-size:10px;color:var(--muted);">${s.count}回の購入記録</div>` : ''}
+          </div>
+          <div style="text-align:right;">
+            <div>
+              <span style="color:${isCheapest?'var(--accent)':'var(--text)'};font-weight:700;">¥${s.min.toLocaleString()}</span>
+              ${s.count > 1 && s.max !== s.min ? `<span style="color:var(--muted);font-size:11px;"> 〜 ¥${s.max.toLocaleString()}</span>` : ''}
+            </div>
+            ${up ? `<div style="font-size:11px;color:var(--muted);">${up}</div>` : ''}
+            ${s.count > 1 && Math.round(s.avg) !== s.min ? `<div style="font-size:11px;color:var(--muted);">平均 ¥${Math.round(s.avg).toLocaleString()}</div>` : ''}
+          </div>
         </div>`;
       }).join('')}
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:right;">購入履歴から自動集計</div>
     </div>`;
 }
 
-// 店舗別買い物リスト
+// 店舗別買い物リスト（各商品の最安値店舗でグループ化）
 function showShoppingList() {
   const prods = S.cache?.ok ? buildProducts(S.cache) : [];
-  const barcodes = S.cache?.barcodes || [];
 
-  // 店舗ごとに商品をグループ化
-  const storeMap = {};
-  barcodes.forEach(b => {
-    const store = b.store_name ? String(b.store_name) : '（店舗未設定）';
-    if (!storeMap[store]) storeMap[store] = [];
-    const prod = prods.find(p => String(p.group_id) === String(b.group_id));
-    if (prod && !storeMap[store].find(x => x.group_id === prod.group_id)) {
-      storeMap[store].push({ ...prod, storePrice: b.price });
-    }
+  // 各商品の最安値店舗を特定してグループ化
+  const storeGroups = {}; // storeName -> [enrichedProduct]
+  prods.forEach(p => {
+    const storePrices = calcStorePrices(p);
+    const cheapest    = storePrices[0];
+    const storeName   = cheapest ? cheapest.store : '（店舗未設定）';
+    const stats       = calcConsumptionStats(p);
+    if (!storeGroups[storeName]) storeGroups[storeName] = [];
+    storeGroups[storeName].push({
+      ...p,
+      cheapestPrice:  cheapest?.min  || null,
+      allStorePrices: storePrices,
+      daysLeft:       stats.bestDays,
+    });
   });
 
-  const content = Object.entries(storeMap).sort(([a],[b]) => a.localeCompare(b,'ja')).map(([store, items]) => {
-    const sorted = [...items].sort((a,b) => a.qty - b.qty); // 在庫少ない順
+  // アイテムを「要購入優先 → 在庫少ない順」にソート
+  const sortItems = items => [...items].sort((a, b) => {
+    const urgA = (a.isLow || (a.daysLeft !== null && a.daysLeft < 7)) ? 0 : 1;
+    const urgB = (b.isLow || (b.daysLeft !== null && b.daysLeft < 7)) ? 0 : 1;
+    return urgA !== urgB ? urgA - urgB : a.qty - b.qty;
+  });
+
+  // 店舗順: 実店舗を五十音順、未設定を末尾
+  const storeOrder = Object.keys(storeGroups).sort((a, b) => {
+    if (a === '（店舗未設定）') return 1;
+    if (b === '（店舗未設定）') return -1;
+    return a.localeCompare(b, 'ja');
+  });
+
+  const content = storeOrder.map(store => {
+    const items       = sortItems(storeGroups[store]);
+    const urgentCount = items.filter(p => p.isLow || (p.daysLeft !== null && p.daysLeft < 7)).length;
+    const isUnset     = store === '（店舗未設定）';
     return `
       <div style="margin-bottom:18px;">
-        <div style="font-weight:700;color:var(--accent);font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
-          🏪 ${esc(store)}
-          <span style="font-size:11px;color:var(--muted);font-weight:400;">${sorted.length}品</span>
+        <div style="font-weight:700;color:${isUnset?'var(--muted)':'var(--accent)'};font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          ${isUnset ? '❓' : '🏪'} ${esc(store)}
+          <span style="font-size:11px;color:var(--muted);font-weight:400;">${items.length}品</span>
+          ${urgentCount > 0 ? `<span style="font-size:10px;background:var(--warn);color:var(--bg);font-weight:700;padding:2px 7px;border-radius:8px;">🛒 要購入 ${urgentCount}</span>` : ''}
         </div>
-        ${sorted.map(p => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface2);border-radius:9px;margin-bottom:5px;border:1.5px solid ${p.isLow ? 'var(--warn)' : 'transparent'};">
-            <div>
+        ${items.map(p => {
+          const urgent   = p.isLow || (p.daysLeft !== null && p.daysLeft < 7);
+          const daysCol  = p.daysLeft === null ? '' : p.daysLeft < 7 ? 'var(--danger)' : p.daysLeft < 30 ? 'var(--warn)' : 'var(--accent)';
+          const otherStr = p.allStorePrices.length > 1
+            ? p.allStorePrices.slice(1, 3).map(s => `${esc(s.store)} ¥${s.min.toLocaleString()}`).join('、')
+            : '';
+          return `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--surface2);border-radius:9px;margin-bottom:5px;border:1.5px solid ${urgent ? 'var(--warn)' : 'transparent'};">
+            <div style="min-width:0;flex:1;">
               <div style="font-size:14px;font-weight:600;">${esc(p.name)}${p.isLow ? '<span class="alert-badge">少</span>' : ''}</div>
-              <div style="font-size:11px;color:var(--muted);">在庫: ${p.qty}${esc(p.unit)}${p.storePrice ? ` · ¥${Number(p.storePrice).toLocaleString()}` : ''}</div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px;">
+                在庫 ${p.qty}${esc(p.unit)}
+                ${p.cheapestPrice ? ` · <span style="color:var(--accent);font-weight:700;">¥${Number(p.cheapestPrice).toLocaleString()}</span>` : ''}
+                ${p.daysLeft !== null ? ` · <span style="color:${daysCol};">あと約${p.daysLeft}日</span>` : ''}
+              </div>
+              ${otherStr ? `<div style="font-size:10px;color:var(--muted);margin-top:2px;">他店: ${otherStr}</div>` : ''}
             </div>
-            ${p.isLow ? '<span style="font-size:18px;">🛒</span>' : '<span style="font-size:18px;opacity:0.3;">✓</span>'}
-          </div>`).join('')}
+            <span style="font-size:20px;margin-left:8px;flex-shrink:0;">${urgent ? '🛒' : '<span style="opacity:0.25;">✓</span>'}</span>
+          </div>`;
+        }).join('')}
       </div>`;
   }).join('');
 
   const ov = document.createElement('div'); ov.className = 'overlay';
   ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
-    <h2>🛒 店舗別買い物リスト</h2>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">🛒マークは在庫が少ない商品です</p>
+    <h2>🛒 最安値店舗別リスト</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:14px;">各商品を最安値で買える店舗にまとめました。🛒は在庫少または残日数7日以内</p>
     <div style="max-height:62vh;overflow-y:auto;">
-      ${content || '<div class="empty" style="padding:32px 0;"><div class="ei">🏪</div><p>店舗情報が登録されていません<br>商品にバーコードと店舗名を登録してください</p></div>'}
+      ${content || '<div class="empty" style="padding:32px 0;"><div class="ei">🏪</div><p>店舗情報がまだ登録されていません<br>入庫時に店舗名・価格を入力してください</p></div>'}
     </div>
     <button class="btn btn-secondary" id="sl-close" style="margin-top:12px;">閉じる</button>
   </div>`;
@@ -791,7 +921,7 @@ function paintHomeList() {
             ${p.unitPrice ? ` · <span style="color:var(--accent);">¥${p.unitPrice.toFixed(1)}/${esc(p.volume_unit||p.unit)}</span>` : ''}
             ${p.stockValue ? ` · 計¥${Math.round(p.stockValue).toLocaleString()}` : ''}
             ${(!p.latestPrice) ? `しきい値: ${p.alert_threshold}${esc(p.unit)}` : ''}
-            ${(() => { const d = calcDaysRemaining(p); return d !== null ? ` · <span style="color:var(--warn);">あと約${d}日</span>` : ''; })()}
+            ${(() => { const stats = calcConsumptionStats(p); const d = stats.bestDays; if (d === null) return ''; const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })()}
              · ${relDate(p.updated_at)}
           </div>
         </div>
@@ -1060,7 +1190,10 @@ function renderAction() {
 }
 function renderExtras() {
   if (S.actionMode !== 'in') return '<p style="font-size:12px;color:var(--muted);text-align:center;">（店舗・価格の入力は入庫時のみ）</p>';
-  const stores = getUniqueStores();
+  const stores     = getUniqueStores();
+  const p          = S.activeProduct;
+  const defaultVol = Number(p?.volume) || 0;
+  const volUnit    = esc(p?.volume_unit || p?.unit || '');
   return `
     <div class="form-group">
       <label class="form-label">店舗名（任意）</label>
@@ -1071,7 +1204,35 @@ function renderExtras() {
       <label class="form-label">購入価格（任意）</label>
       <input class="form-input" id="price-in" type="number" placeholder="198" inputmode="numeric" value="${esc(S.scannedPrice)}">
     </div>
+    ${defaultVol > 0 ? `
+    <div class="form-group">
+      <label class="form-label">この入庫の容量（任意）</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input class="form-input" id="lot-vol" type="number" placeholder="${defaultVol}" value="${defaultVol}" inputmode="decimal" step="any" min="0.1" style="flex:2;">
+        <span style="color:var(--muted);font-size:14px;font-weight:600;flex-shrink:0;">${volUnit}</span>
+      </div>
+      <p class="form-hint" id="vol-conv-hint" style="transition:color 0.2s;">デフォルト: ${defaultVol}${volUnit}　— 容量が違う場合に変更すると実質数へ換算します</p>
+    </div>` : ''}
   `;
+}
+
+// 換算ヒントをリアルタイム更新
+function updateVolConvHint() {
+  const p = S.activeProduct; if (!p) return;
+  const defaultVol = Number(p.volume) || 0; if (!defaultVol) return;
+  const lotVolEl = document.getElementById('lot-vol'); if (!lotVolEl) return;
+  const lotVol   = parseFloat(lotVolEl.value) || defaultVol;
+  const hint     = document.getElementById('vol-conv-hint'); if (!hint) return;
+  const factor   = lotVol / defaultVol;
+  const physQty  = parseInt(S.actionInput) || 0;
+  const volUnit  = p.volume_unit || p.unit || '';
+  if (Math.abs(factor - 1) > 0.001) {
+    const effective = Math.round(physQty * factor * 10) / 10;
+    hint.innerHTML  = `<span style="color:var(--warn);">⚠ 換算あり: ${physQty}個 × ${factor.toFixed(2)} = 実質 <strong>${effective}個分</strong> として加算</span>`;
+  } else {
+    hint.textContent = `デフォルト容量と同じ (${defaultVol}${volUnit})`;
+    hint.style.color = '';
+  }
 }
 function bindAction() {
   const p = S.activeProduct; if (!p) return;
@@ -1083,14 +1244,16 @@ function bindAction() {
     document.querySelectorAll('.mode-tab').forEach(t=>t.classList.toggle('active',t.dataset.mode===S.actionMode));
     document.getElementById('action-disp').textContent = '0';
     document.getElementById('act-extras').innerHTML = renderExtras();
+    bindExtrasListeners();
   }));
 
-  // Numpad
+  // Numpad — キー押下時に換算ヒントも更新
   document.querySelectorAll('.nk').forEach(k => k.addEventListener('click', () => {
     const key = k.dataset.k;
     if (key==='⌫') S.actionInput = S.actionInput.slice(0,-1);
     else if (S.actionInput.length < 5) S.actionInput += key;
     document.getElementById('action-disp').textContent = S.actionInput||'0';
+    updateVolConvHint();
   }));
 
   document.getElementById('act-cancel').addEventListener('click', () => { S.actionInput=''; go('home'); });
@@ -1099,18 +1262,35 @@ function bindAction() {
   document.getElementById('del-prod').addEventListener('click', () => confirmDelete(p));
 
   document.getElementById('act-extras').innerHTML = renderExtras();
+  bindExtrasListeners();
   const ph = renderPriceHistory(p);
   document.getElementById('act-price-hist').innerHTML = ph
     ? `<div style="padding:0 2px 8px;">${ph}</div>` : '';
 }
+
+// エクストラフォームのリスナーをまとめてバインド
+function bindExtrasListeners() {
+  document.getElementById('lot-vol')?.addEventListener('input', updateVolConvHint);
+}
 async function doStockAction(p) {
-  const qty = parseInt(S.actionInput) || 0;
-  if (qty === 0 && S.actionMode !== 'set') { toast('数量を入力してください','err'); return; }
-  if (qty === 0 && S.actionMode === 'set') {
+  const physQty = parseInt(S.actionInput) || 0;
+  if (physQty === 0 && S.actionMode !== 'set') { toast('数量を入力してください','err'); return; }
+  if (physQty === 0 && S.actionMode === 'set') {
     if (!confirm('在庫を 0 にセットしますか？')) return;
   }
   const storeName = document.getElementById('store-in')?.value?.trim() || '';
   const price     = document.getElementById('price-in')?.value?.trim() || '';
+
+  // 容量換算（入庫のみ・容量設定がある商品のみ）
+  const defaultVol = Number(p.volume) || 0;
+  const lotVolEl   = document.getElementById('lot-vol');
+  const lotVol     = (defaultVol > 0 && lotVolEl) ? (parseFloat(lotVolEl.value) || defaultVol) : defaultVol;
+  const convFactor = (defaultVol > 0 && lotVol > 0 && S.actionMode === 'in') ? lotVol / defaultVol : 1;
+  const qty        = Math.abs(convFactor - 1) > 0.001
+    ? Math.round(physQty * convFactor * 10) / 10
+    : physQty;
+  const lotNote    = Math.abs(convFactor - 1) > 0.001
+    ? ` (${physQty}個×${convFactor.toFixed(2)}→実質${qty}個分)` : '';
 
   if (S.url==='DEMO') {
     const inv = S.cache.inventory.find(r=>r.group_id===p.group_id);
@@ -1120,16 +1300,25 @@ async function doStockAction(p) {
       if (S.actionMode==='out') inv.qty = Math.max(0, inv.qty-qty);
       if (S.actionMode==='set') inv.qty = Math.max(0, qty);
       inv.updated_at = new Date().toLocaleString('ja-JP');
-      S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:S.scannedBarcode||'', action:S.actionMode, qty, after_qty:inv.qty, store_name:storeName, price, user:S.user});
+      const lotVolRecord = (S.actionMode === 'in' && Math.abs(convFactor - 1) > 0.001) ? lotVol : null;
+      S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:S.scannedBarcode||'', action:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, after_qty:inv.qty, store_name:storeName, price, user:S.user});
     }
-    toast(`更新しました（デモ）`);
+    // 入庫時に店舗・価格が入力されていればバーコードテーブルにも反映
+    if (S.actionMode === 'in' && storeName && price) {
+      S.cache.barcodes = S.cache.barcodes || [];
+      const existBc = S.cache.barcodes.find(b => String(b.group_id) === String(p.group_id) && b.store_name === storeName);
+      if (existBc) { existBc.price = price; }
+      else { S.cache.barcodes.push({barcode:S.scannedBarcode||`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')}); }
+    }
+    toast(`更新しました（デモ）${lotNote}`);
     S.actionInput=''; go('home'); return;
   }
   try {
+    const lotVolRecord = (S.actionMode === 'in' && Math.abs(convFactor - 1) > 0.001) ? lotVol : null;
     const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name,
-      barcode:S.scannedBarcode||'', move:S.actionMode, qty, store_name:storeName, price, user:S.user});
+      barcode:S.scannedBarcode||'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, store_name:storeName, price, user:S.user});
     if (res.ok) {
-      toast(`${p.name} → ${res.afterQty}${p.unit}`);
+      toast(`${p.name} → ${res.afterQty}${p.unit}${lotNote}`);
       const fresh = await getAllData(true); if(fresh?.ok) S.cache=fresh;
       S.actionInput=''; go('home');
     } else toast(res.error||'エラー','err');
@@ -1186,6 +1375,7 @@ function renderAdd() {
           <input class="form-input" id="a-vol-unit" type="text" placeholder="ml" value="${esc(p?.volume_unit||'')}" style="flex:1;">
         </div>
         <p class="form-hint">例：500 ml、1000 g　→ 価格÷内容量で単価を自動計算します</p>
+        ${(p && Number(p.volume) > 0 && p.qty > 0) ? `<div id="vol-recalc-hint" style="font-size:12px;margin-top:6px;min-height:18px;"></div>` : ''}
       </div>
       <div class="form-group">
         <label class="form-label">アラートしきい値</label>
@@ -1236,13 +1426,31 @@ function bindAdd() {
     if (ex) ex.style.display = e.target.value.trim() ? '' : 'none';
   });
 
+  // 容量変更時の在庫換算プレビュー（編集モードかつ既存在庫あり）
+  const ep = S.editProduct;
+  if (ep && Number(ep.volume) > 0 && ep.qty > 0) {
+    const oldVol = Number(ep.volume), oldQty = ep.qty;
+    document.getElementById('a-vol')?.addEventListener('input', e => {
+      const newVol = parseFloat(e.target.value) || 0;
+      const hint = document.getElementById('vol-recalc-hint');
+      if (!hint) return;
+      if (newVol > 0 && Math.abs(newVol - oldVol) > 0.001) {
+        const newQty = Math.round(oldQty * (oldVol / newVol) * 10) / 10;
+        hint.innerHTML = `<span style="color:var(--warn);">⚠ 容量変更により在庫を <strong>${oldQty}個 → ${newQty}個</strong> に自動換算します</span>`;
+      } else {
+        hint.textContent = ''; // 元の容量に戻したら消去
+      }
+    });
+  }
+
   document.getElementById('a-save').addEventListener('click', saveProduct);
 }
 async function saveProduct() {
   if (S.saving) return; // 二重登録防止
   const name    = document.getElementById('a-name').value.trim();
   const unit    = document.getElementById('a-unit').value.trim() || '個';
-  const thr     = parseInt(document.getElementById('a-thr').value) || 5;
+  const thrStr  = document.getElementById('a-thr').value.trim();
+  const thr     = thrStr !== '' ? (parseInt(thrStr) >= 0 ? parseInt(thrStr) : 0) : 5;
   const volume  = parseFloat(document.getElementById('a-vol')?.value) || 0;
   const volUnit = document.getElementById('a-vol-unit')?.value?.trim() || '';
   if (!name) { toast('商品名を入力してください','err'); return; }
@@ -1258,10 +1466,22 @@ async function saveProduct() {
   try {
     if (S.url==='DEMO') {
       if (isEdit) {
+        const oldVol = Number(S.editProduct.volume) || 0;
+        const oldQty = S.editProduct.qty || 0;
         const p = S.cache.products.find(x=>x.group_id===gid);
         if (p) { p.name=name; p.unit=unit; p.volume=volume; p.volume_unit=volUnit; }
         const inv = S.cache.inventory.find(x=>x.group_id===gid);
-        if (inv) inv.alert_threshold=thr;
+        if (inv) {
+          inv.alert_threshold = thr;
+          // 容量が変わった場合、在庫数を比率で自動換算
+          if (oldVol > 0 && volume > 0 && Math.abs(volume - oldVol) > 0.001 && oldQty > 0) {
+            const newQty = Math.round(oldQty * (oldVol / volume) * 10) / 10;
+            inv.qty = newQty;
+            inv.updated_at = new Date().toLocaleString('ja-JP');
+            S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:gid, product_name:name, barcode:'', action:'set', qty:newQty, after_qty:newQty, store_name:'', price:'', user:S.user});
+            toast(`在庫換算: ${oldQty}個 → ${newQty}個（デモ）`);
+          }
+        }
       } else {
         S.cache.products.push({group_id:gid, name, unit, volume, volume_unit:volUnit, created_at:new Date().toLocaleString('ja-JP')});
         const qty = parseInt(document.getElementById('a-qty')?.value)||0;
@@ -1275,7 +1495,17 @@ async function saveProduct() {
 
     const r1 = await apiPost({action:'upsertProduct', group_id:gid, name, unit, volume, volume_unit:volUnit});
     if (!r1.ok) { toast(r1.error||'エラー','err'); return; }
-    await apiPost({action:'setAlert', group_id:gid, threshold:thr});
+    const r2 = await apiPost({action:'setAlert', group_id:gid, threshold:thr});
+    if (!r2.ok) toast('しきい値の保存に失敗: '+(r2.error||'エラー'),'err');
+    // 容量変更時の在庫自動換算（編集モードのみ）
+    if (isEdit) {
+      const oldVol = Number(S.editProduct.volume) || 0;
+      const oldQty = S.editProduct.qty || 0;
+      if (oldVol > 0 && volume > 0 && Math.abs(volume - oldVol) > 0.001 && oldQty > 0) {
+        const newQty = Math.round(oldQty * (oldVol / volume) * 10) / 10;
+        await apiPost({action:'stockAction', group_id:gid, product_name:name, barcode:'', move:'set', qty:newQty, user:S.user});
+      }
+    }
     if (!isEdit) {
       const qty = parseInt(document.getElementById('a-qty')?.value)||0;
       if (qty>0) await apiPost({action:'stockAction', group_id:gid, product_name:name, barcode:'', move:'set', qty, user:S.user});
@@ -1301,7 +1531,7 @@ async function saveProduct() {
 // HISTORY SCREEN
 // ============================================================
 function renderHistory() {
-  const opts = [{id:'all',l:'すべて'},{id:'in',l:'📥 入庫'},{id:'out',l:'📤 出庫'},{id:'set',l:'🔧 セット'}];
+  const opts = [{id:'all',l:'すべて'},{id:'in',l:'📥 入庫'},{id:'out',l:'📤 出庫'},{id:'set',l:'🔧 セット'},{id:'analytics',l:'📊 分析'}];
   return `
     <div class="pills">
       ${opts.map(o=>`<button class="pill ${S.histFilter===o.id?'active':''} hf" data-f="${o.id}">${o.l}</button>`).join('')}
@@ -1323,6 +1553,7 @@ function paintHistory() {
   const el=document.getElementById('hist-list'); if (!el) return;
   const data=S.cache;
   if (!data?.ok) { el.innerHTML=`<div class="empty"><div class="ei">⚠️</div><p>${esc(data?.error||'エラー')}</p></div>`; return; }
+  if (S.histFilter === 'analytics') { paintHistoryAnalytics(el, data); return; }
   let hist = data.history||[];
   if (S.histFilter!=='all') hist=hist.filter(h=>h.action===S.histFilter);
   if (!hist.length) { el.innerHTML='<div class="empty"><div class="ei">📋</div><p>履歴がありません</p></div>'; return; }
@@ -1333,7 +1564,7 @@ function paintHistory() {
       <div class="hist-icon ${h.action}">${icon[h.action]||'•'}</div>
       <div class="hist-body">
         <div class="hist-name">${esc(h.product_name||h.group_id)}</div>
-        <div class="hist-meta">${esc(h.user)} · ${relDate(h.timestamp)}${h.store_name?` · ${esc(h.store_name)}`:''}${h.price?` · ¥${Number(h.price).toLocaleString()}`:''}
+        <div class="hist-meta">${esc(h.user)} · ${relDate(h.timestamp)}${h.store_name?` · 🏪 ${esc(h.store_name)}`:''}${h.price?` · ¥${Number(h.price).toLocaleString()}`:''}
         </div>
       </div>
       <div class="hist-right">
@@ -1341,6 +1572,61 @@ function paintHistory() {
         <div class="hist-after">→ ${h.after_qty}</div>
       </div>
     </div>`).join('');
+}
+
+function paintHistoryAnalytics(el, data) {
+  const prods = buildProducts(data);
+  const rows = prods.map(p => {
+    const stats = calcConsumptionStats(p);
+    const storePrices = calcStorePrices(p);
+    if (stats.bestDays === null && !storePrices.length) return '';
+    const daysCol = stats.bestDays === null ? 'var(--text)' : stats.bestDays < 7 ? 'var(--danger)' : stats.bestDays < 30 ? 'var(--warn)' : 'var(--accent)';
+    return `<div class="card">
+      <div style="font-weight:700;font-size:15px;margin-bottom:10px;">${esc(p.name)}</div>
+      ${stats.bestDays !== null ? `
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+          <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">📅 消費予測</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">
+            <span style="font-size:13px;color:var(--muted);">推定残日数</span>
+            <span style="color:${daysCol};font-weight:800;font-size:20px;">約${stats.bestDays}日</span>
+          </div>
+          ${stats.avgDaysPerUnit !== null ? `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;">
+            <span style="color:var(--muted);">消費速度</span>
+            <span>1${esc(p.unit)} あたり ${stats.avgDaysPerUnit.toFixed(1)}日</span>
+          </div>` : ''}
+          ${stats.purchaseCycleDays !== null ? `<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0;">
+            <span style="color:var(--muted);">平均購入サイクル</span>
+            <span>${Math.round(stats.purchaseCycleDays)}日に1回</span>
+          </div>` : ''}
+          ${stats.daysFromOut !== null && stats.daysFromIn !== null && Math.abs(stats.daysFromOut - stats.daysFromIn) > 5 ? `
+            <div style="font-size:11px;color:var(--muted);margin-top:6px;border-top:1px solid var(--border);padding-top:6px;">
+              出庫記録ベース: 約${stats.daysFromOut}日 / 購入サイクルベース: 約${stats.daysFromIn}日
+            </div>` : ''}
+        </div>` : ''}
+      ${storePrices.length ? `
+        <div>
+          <div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">🏪 店舗別価格比較</div>
+          ${storePrices.map((s, i) => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+              <div>
+                <span>${i===0?'🥇 ':''}${esc(s.store)}</span>
+                ${s.count > 1 ? `<span style="font-size:10px;color:var(--muted);margin-left:6px;">${s.count}回記録</span>` : ''}
+              </div>
+              <div style="text-align:right;">
+                <div>
+                  <span style="color:${i===0?'var(--accent)':'var(--text)'};font-weight:700;">¥${s.min.toLocaleString()}</span>
+                  ${s.count > 1 && s.max !== s.min ? `<span style="color:var(--muted);font-size:11px;"> 〜 ¥${s.max.toLocaleString()}</span>` : ''}
+                </div>
+                ${s.unitPrice ? `<div style="font-size:11px;color:var(--muted);">¥${s.unitPrice.toFixed(1)}/${esc(p.volume_unit||p.unit)}</div>` : ''}
+                ${s.count > 1 && Math.round(s.avg) !== s.min ? `<div style="font-size:11px;color:var(--muted);">平均 ¥${Math.round(s.avg).toLocaleString()}</div>` : ''}
+              </div>
+            </div>`).join('')}
+        </div>` : ''}
+    </div>`;
+  }).filter(Boolean).join('');
+  el.innerHTML = rows
+    ? `<div style="padding:8px 0 4px;font-size:11px;color:var(--muted);text-align:center;">入庫・出庫履歴から自動算出</div>${rows}`
+    : `<div class="empty"><div class="ei">📊</div><p>履歴データが少ないため分析できません<br><span style="font-size:12px;">入庫・出庫を記録すると<br>消費予測・価格比較が表示されます</span></p></div>`;
 }
 
 // ============================================================
