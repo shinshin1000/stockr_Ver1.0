@@ -345,9 +345,11 @@ input { font-family: inherit; }
 // STATE
 // ============================================================
 const S = {
-  url:    localStorage.getItem('stockr_url')  || '',
-  user:   localStorage.getItem('stockr_user') || '',
-  sort:   localStorage.getItem('stockr_sort') || 'name',
+  url:        localStorage.getItem('stockr_url')         || '',
+  user:       localStorage.getItem('stockr_user')        || '',
+  yahooKey:   localStorage.getItem('stockr_yahoo_key')   || '',
+  rakutenKey: localStorage.getItem('stockr_rakuten_key') || '',
+  sort:       localStorage.getItem('stockr_sort')        || 'name',
   screen: 'home',
   query:  '',
   histFilter: 'all',
@@ -695,6 +697,144 @@ function getUniqueStores() {
   const stores = new Set();
   (S.cache?.barcodes || []).forEach(b => { if (b.store_name) stores.add(String(b.store_name)); });
   return [...stores].sort();
+}
+
+// 過去に使った容量単位 + デフォルト一覧
+function getUsedVolumeUnits() {
+  const base = ['ml', 'L', 'g', 'kg', 'oz'];
+  const used = new Set(base);
+  (S.cache?.products || []).forEach(p => { if (p.volume_unit) used.add(p.volume_unit); });
+  return [...used];
+}
+
+// ============================================================
+// EXTERNAL PRODUCT INFO (JAN → 商品名・価格)
+// ============================================================
+// 外部ECサイトから商品名・価格を取得
+// APIキーなしでも Open Food Facts (食品) は動作
+// Yahoo!/楽天は設定画面でAPIキーを登録すると有効になる
+async function fetchExternalProductInfo(bc) {
+  const result = { name: '', prices: [], source: [] };
+
+  // 1. Open Food Facts（キー不要・食品向け）
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 4000);
+    const res  = await fetch(
+      `https://world.openfoodfacts.org/api/v0/product/${bc}.json?fields=product_name,product_name_ja,brands`,
+      { signal: ctrl.signal }
+    );
+    const data = await res.json();
+    if (data.status === 1 && data.product) {
+      const p = data.product;
+      const n = p.product_name_ja || p.product_name || p.brands || '';
+      if (n) { result.name = n; result.source.push('Open Food Facts'); }
+    }
+  } catch(e) {}
+
+  // 2. Yahoo!ショッピングAPI（JANコード直接検索・最も精度高）
+  const yahooKey = localStorage.getItem('stockr_yahoo_key');
+  if (yahooKey) {
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 6000);
+      const res  = await fetch(
+        `https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch?appid=${encodeURIComponent(yahooKey)}&jan_code=${encodeURIComponent(bc)}&results=10&sort=-score`,
+        { signal: ctrl.signal }
+      );
+      const data = await res.json();
+      if (data.hits?.length > 0) {
+        if (!result.name) result.name = data.hits[0].name || '';
+        data.hits.forEach(h => {
+          if (h.price) result.prices.push({ storeName: h.seller?.name || 'Yahoo!ショッピング', price: Number(h.price) });
+        });
+        result.source.push('Yahoo!ショッピング');
+      }
+    } catch(e) {}
+  }
+
+  // 3. 楽天市場API（JANコードをキーワードに検索）
+  const rakutenKey = localStorage.getItem('stockr_rakuten_key');
+  if (rakutenKey) {
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 6000);
+      const res  = await fetch(
+        `https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?applicationId=${encodeURIComponent(rakutenKey)}&keyword=${encodeURIComponent(bc)}&hits=10&sort=%2BitemPrice&format=json`,
+        { signal: ctrl.signal }
+      );
+      const data = await res.json();
+      if (data.Items?.length > 0) {
+        if (!result.name) {
+          const raw = data.Items[0].Item?.itemName || '';
+          result.name = raw.replace(/【[^】]*】/g,'').replace(/\[[^\]]*\]/g,'').trim();
+        }
+        data.Items.forEach(item => {
+          const it = item.Item;
+          if (it?.itemPrice) result.prices.push({ storeName: it.shopName || '楽天市場', price: Number(it.itemPrice) });
+        });
+        result.source.push('楽天市場');
+      }
+    } catch(e) {}
+  }
+
+  result.prices.sort((a, b) => a.price - b.price);
+  return result;
+}
+
+// 外部最安値をモーダルで表示
+async function showExternalPrices(p, bc) {
+  const yahooKey   = localStorage.getItem('stockr_yahoo_key');
+  const rakutenKey = localStorage.getItem('stockr_rakuten_key');
+  if (!yahooKey && !rakutenKey) {
+    const ov = document.createElement('div'); ov.className = 'overlay';
+    ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
+      <h2>🌐 外部価格検索</h2>
+      <div style="background:var(--surface2);border-radius:10px;padding:14px;margin-bottom:16px;font-size:13px;color:var(--muted);line-height:1.7;">
+        ECサイトの最安値を自動取得するにはAPIキーが必要です。<br>
+        設定画面 → 外部API から以下いずれかを登録してください：<br>
+        <span style="color:var(--text);font-weight:600;">• Yahoo!ショッピング Application ID</span><br>
+        <span style="color:var(--text);font-weight:600;">• 楽天市場 Application ID</span>
+      </div>
+      <button class="btn btn-primary" id="ep-go-settings">⚙️ 設定を開く</button>
+      <button class="btn btn-secondary" id="ep-cancel">閉じる</button>
+    </div>`;
+    document.body.appendChild(ov);
+    document.getElementById('ep-go-settings').addEventListener('click', () => { ov.remove(); go('settings'); });
+    document.getElementById('ep-cancel').addEventListener('click', () => ov.remove());
+    return;
+  }
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
+    <h2>🌐 ECサイト最安値</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">${esc(p.name)}　JAN: <code style="color:var(--accent);">${esc(bc)}</code></p>
+    <div id="ext-price-result"><div class="loading" style="padding:24px 0;"><div class="spinner"></div>検索中…</div></div>
+    <button class="btn btn-secondary" id="ep-close" style="margin-top:12px;">閉じる</button>
+  </div>`;
+  document.body.appendChild(ov);
+  document.getElementById('ep-close').addEventListener('click', () => ov.remove());
+
+  const info = await fetchExternalProductInfo(bc);
+  const el   = document.getElementById('ext-price-result');
+  if (!el) return;
+
+  if (!info.prices.length) {
+    el.innerHTML = `<div class="empty" style="padding:20px 0;"><div class="ei">🔍</div><p>価格情報が見つかりませんでした<br><span style="font-size:11px;">APIキーや商品の登録状況を確認してください</span></p></div>`;
+    return;
+  }
+  const best = info.prices[0];
+  el.innerHTML = `
+    <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">🥇 最安値</div>
+      <div style="font-size:26px;font-weight:900;color:var(--accent);">¥${best.price.toLocaleString()}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(best.storeName)}</div>
+    </div>
+    ${info.prices.slice(1, 8).map(item => `
+      <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
+        <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;">${esc(item.storeName)}</span>
+        <span style="font-weight:700;">¥${item.price.toLocaleString()}</span>
+      </div>`).join('')}
+    <div style="font-size:10px;color:var(--muted);margin-top:8px;text-align:right;">取得元: ${info.source.join('・')}</div>`;
 }
 
 // 消費統計を計算（出庫ベース + 入庫サイクルベース）
@@ -1058,36 +1198,21 @@ async function handleBarcode(bc) {
   }
 }
 
-// JAN コードから商品名を自動取得（Open Food Facts）
+// 後方互換（旧 fetchProductName → 新関数へ委譲）
 async function fetchProductName(bc) {
-  try {
-    // fields を絞ることで転送量を減らし高速化、タイムアウト4秒
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
-    const res = await fetch(
-      `https://world.openfoodfacts.org/api/v0/product/${bc}.json?fields=product_name,product_name_ja,brands`,
-      { signal: controller.signal }
-    );
-    clearTimeout(timer);
-    const data = await res.json();
-    if (data.status === 1 && data.product) {
-      const p = data.product;
-      return p.product_name_ja || p.product_name || p.brands || '';
-    }
-  } catch(e) {}
-  return '';
+  const info = await fetchExternalProductInfo(bc);
+  return info.name;
 }
 
 async function showUnknownBarcode(bc) {
   const prods = buildProducts(S.cache||{});
   const ov = document.createElement('div'); ov.className='overlay';
 
-  // まず「検索中」で表示
   ov.innerHTML=`<div class="modal"><div class="modal-handle"></div>
     <h2>🔍 未登録のバーコード</h2>
     <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">バーコード: <code style="color:var(--accent)">${esc(bc)}</code></p>
     <div id="jan-result" style="margin-bottom:16px;">
-      <div class="loading" style="padding:16px 0;"><div class="spinner"></div>商品名を検索中…</div>
+      <div class="loading" style="padding:16px 0;"><div class="spinner"></div>商品名・価格を検索中…</div>
     </div>
     <button class="btn btn-primary" id="ob-new">＋ 新しい商品として登録</button>
     <button class="btn btn-secondary" id="ob-link">🔗 既存の商品に紐付ける</button>
@@ -1095,23 +1220,35 @@ async function showUnknownBarcode(bc) {
   </div>`;
   document.body.appendChild(ov);
 
-  // 商品名を非同期で取得して表示
-  const name = await fetchProductName(bc);
+  // 商品名・価格を並列取得
+  const info = await fetchExternalProductInfo(bc);
   const janResult = document.getElementById('jan-result');
-  if (janResult) {
-    if (name) {
-      janResult.innerHTML = `
-        <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:4px;">
-          <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">✅ 商品名が見つかりました</div>
-          <div style="font-size:16px;font-weight:600;">${esc(name)}</div>
-        </div>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:4px;">登録時に自動で入力されます（変更も可能）</p>`;
-    } else {
-      janResult.innerHTML = `<p style="font-size:13px;color:var(--muted);margin-bottom:4px;">データベースに商品情報が見つかりませんでした。手動で入力してください。</p>`;
-    }
-  }
+  if (!janResult) return;
 
-  document.getElementById('ob-new').addEventListener('click', () => { ov.remove(); go('add',{editProduct:null, preBarcode:bc, preName:name}); });
+  let html = '';
+  if (info.name) {
+    html += `
+      <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
+        <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">✅ 商品名が見つかりました</div>
+        <div style="font-size:16px;font-weight:600;">${esc(info.name)}</div>
+        ${info.source.length ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;">取得元: ${info.source.join('・')}</div>` : ''}
+      </div>`;
+  } else {
+    html += `<p style="font-size:13px;color:var(--muted);margin-bottom:8px;">商品名は見つかりませんでした。手動で入力してください。</p>`;
+  }
+  if (info.prices.length) {
+    const best = info.prices[0];
+    html += `
+      <div style="background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:4px;">
+        <div style="font-size:11px;color:var(--muted);font-weight:700;margin-bottom:6px;">🏷 ECサイト最安値</div>
+        <div style="font-size:20px;font-weight:900;color:var(--accent);">¥${best.price.toLocaleString()}</div>
+        <div style="font-size:11px;color:var(--muted);">${esc(best.storeName)}</div>
+        ${info.prices.length > 1 ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">他${info.prices.length-1}件 最高¥${info.prices[info.prices.length-1].price.toLocaleString()}</div>` : ''}
+      </div>`;
+  }
+  janResult.innerHTML = html || `<p style="font-size:13px;color:var(--muted);">情報が見つかりませんでした。</p>`;
+
+  document.getElementById('ob-new').addEventListener('click', () => { ov.remove(); go('add',{editProduct:null, preBarcode:bc, preName:info.name}); });
   document.getElementById('ob-link').addEventListener('click', () => { ov.remove(); showLinkBarcode(bc, prods); });
   document.getElementById('ob-cancel').addEventListener('click', () => ov.remove());
 }
@@ -1263,9 +1400,15 @@ function bindAction() {
 
   document.getElementById('act-extras').innerHTML = renderExtras();
   bindExtrasListeners();
-  const ph = renderPriceHistory(p);
-  document.getElementById('act-price-hist').innerHTML = ph
-    ? `<div style="padding:0 2px 8px;">${ph}</div>` : '';
+  const ph  = renderPriceHistory(p);
+  const bcs = (S.cache?.barcodes || []).filter(b => String(b.group_id) === String(p.group_id));
+  const extBtn = bcs.length
+    ? `<button class="btn btn-secondary" id="ext-price-btn" style="margin-top:10px;font-size:13px;padding:10px 14px;">🌐 ECサイトの最安値を確認</button>`
+    : '';
+  document.getElementById('act-price-hist').innerHTML = `<div style="padding:0 2px 8px;">${ph || ''}${extBtn}</div>`;
+  if (bcs.length) {
+    document.getElementById('ext-price-btn')?.addEventListener('click', () => showExternalPrices(p, bcs[0].barcode));
+  }
 }
 
 // エクストラフォームのリスナーをまとめてバインド
@@ -1370,11 +1513,15 @@ function renderAdd() {
       </div>
       <div class="form-group">
         <label class="form-label">内容量（任意）</label>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;">
           <input class="form-input" id="a-vol" type="number" placeholder="500" inputmode="decimal" value="${esc(p?.volume||'')}" style="flex:2;">
-          <input class="form-input" id="a-vol-unit" type="text" placeholder="ml" value="${esc(p?.volume_unit||'')}" style="flex:1;">
+          <input class="form-input" id="a-vol-unit" type="text" placeholder="ml" value="${esc(p?.volume_unit||'')}" list="vol-unit-list" style="flex:1;">
+          <datalist id="vol-unit-list">${getUsedVolumeUnits().map(u=>`<option value="${esc(u)}">`).join('')}</datalist>
         </div>
-        <p class="form-hint">例：500 ml、1000 g　→ 価格÷内容量で単価を自動計算します</p>
+        <div class="unit-pill-row" style="margin-top:8px;">
+          ${getUsedVolumeUnits().map(u=>`<button class="unit-pill vup ${(p?.volume_unit||''===u)?'active':''}" data-u="${u}">${u}</button>`).join('')}
+        </div>
+        <p class="form-hint" style="margin-top:6px;">例：500 ml、1000 g　→ 価格÷内容量で単価を自動計算</p>
         ${(p && Number(p.volume) > 0 && p.qty > 0) ? `<div id="vol-recalc-hint" style="font-size:12px;margin-top:6px;min-height:18px;"></div>` : ''}
       </div>
       <div class="form-group">
@@ -1418,6 +1565,15 @@ function bindAdd() {
   }));
   document.getElementById('a-unit')?.addEventListener('input', e => {
     document.querySelectorAll('.up').forEach(p=>p.classList.toggle('active',p.dataset.u===e.target.value));
+  });
+
+  // 容量単位ピル
+  document.querySelectorAll('.vup').forEach(pill => pill.addEventListener('click', () => {
+    document.getElementById('a-vol-unit').value = pill.dataset.u;
+    document.querySelectorAll('.vup').forEach(p => p.classList.toggle('active', p.dataset.u === pill.dataset.u));
+  }));
+  document.getElementById('a-vol-unit')?.addEventListener('input', e => {
+    document.querySelectorAll('.vup').forEach(p => p.classList.toggle('active', p.dataset.u === e.target.value));
   });
 
   // Show/hide barcode extras
@@ -1654,6 +1810,24 @@ function renderSettings() {
         <button class="btn btn-secondary" id="st-test">🔌 接続テスト</button>
       </div>
 
+      <div class="card" style="margin-top:10px;">
+        <div class="card-title">外部API（価格・商品名自動取得）</div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6;">JANコードから最安値を自動取得します。各サービスでAPIキーを無料取得後に入力してください。</p>
+        <div class="form-group">
+          <label class="form-label">Yahoo!ショッピング Application ID</label>
+          <input class="form-input" id="st-yahoo" type="text" placeholder="取得: developer.yahoo.co.jp" value="${esc(S.yahooKey)}">
+          <p class="form-hint">JANコード直接検索に対応。精度が最も高い</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">楽天市場 Application ID</label>
+          <input class="form-input" id="st-rakuten" type="text" placeholder="取得: webservice.rakuten.co.jp" value="${esc(S.rakutenKey)}">
+          <p class="form-hint">楽天の最安値を取得。商品数が豊富</p>
+        </div>
+        <p style="font-size:11px;color:var(--muted);background:rgba(0,229,160,0.06);border:1px solid var(--border);border-radius:8px;padding:8px 10px;line-height:1.6;">
+          💡 Open Food Facts（食品）はキー不要で常時動作します。<br>AmazonはAPIポリシー上、アソシエイト経由でのみ利用可。スクレイピングはToS違反のため非対応。
+        </p>
+      </div>
+
       <button class="btn btn-primary" id="st-save" style="margin-top:4px;">設定を保存</button>
 
       <div class="divider" style="margin:20px 0;"></div>
@@ -1670,12 +1844,16 @@ function renderSettings() {
 }
 function bindSettings() {
   document.getElementById('st-save').addEventListener('click', () => {
-    const user = document.getElementById('st-user').value.trim();
-    const url  = document.getElementById('st-url').value.trim();
+    const user      = document.getElementById('st-user').value.trim();
+    const url       = document.getElementById('st-url').value.trim();
+    const yahooKey  = document.getElementById('st-yahoo').value.trim();
+    const rakutenKey= document.getElementById('st-rakuten').value.trim();
     if (!user) { toast('ユーザー名を入力してください','err'); return; }
-    S.user=user; S.url=url||'DEMO';
-    localStorage.setItem('stockr_user',user);
-    localStorage.setItem('stockr_url', S.url);
+    S.user=user; S.url=url||'DEMO'; S.yahooKey=yahooKey; S.rakutenKey=rakutenKey;
+    localStorage.setItem('stockr_user',    user);
+    localStorage.setItem('stockr_url',     S.url);
+    localStorage.setItem('stockr_yahoo_key',   yahooKey);
+    localStorage.setItem('stockr_rakuten_key', rakutenKey);
     S.cache=null; S.cacheTime=0;
     if (S.url==='DEMO') { S.cache=makeDemoData(); S.cacheTime=Date.now(); }
     toast('設定を保存しました');
