@@ -1606,7 +1606,11 @@ function renderAction() {
   `;
 }
 function renderExtras() {
-  if (S.actionMode !== 'in') return '<p style="font-size:12px;color:var(--muted);text-align:center;">（店舗・価格・メモの入力は入庫時のみ）</p>';
+  if (S.actionMode !== 'in') return `
+    <div style="text-align:center;padding:4px 0 8px;">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">店舗・価格・メモの入力は入庫時のみ</p>
+      <button class="btn btn-secondary" id="act-price-only" style="font-size:13px;padding:10px 18px;">💰 価格だけ記録（在庫変更なし）</button>
+    </div>`;
   const stores     = getUniqueStores();
   const p          = S.activeProduct;
   const defaultVol = Number(p?.volume) || 0;
@@ -1707,6 +1711,7 @@ function bindAction() {
 // エクストラフォームのリスナーをまとめてバインド
 function bindExtrasListeners() {
   document.getElementById('lot-vol')?.addEventListener('input', updateVolConvHint);
+  document.getElementById('act-price-only')?.addEventListener('click', () => showPriceRecord(S.activeProduct));
 }
 async function doStockAction(p) {
   if (S.confirmLock) return;
