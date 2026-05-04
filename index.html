@@ -230,6 +230,18 @@ input { font-family: inherit; }
 }
 .fab-sub:active { transform: scale(0.9); }
 
+/* ==================== SKELETON LOADING ==================== */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.skel {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 6px;
+}
+
 /* ==================== LOADING & EMPTY ==================== */
 .loading { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 48px 24px; color: var(--muted); font-size: 14px; }
 .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; }
@@ -388,8 +400,10 @@ const S = {
 // ============================================================
 // API
 // ============================================================
-async function apiGet(action) {
-  const res = await fetch(`${S.url}?action=${action}`);
+async function apiGet(action, params = {}) {
+  const qs  = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  const url = `${S.url}?action=${action}${qs ? '&'+qs : ''}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
@@ -402,6 +416,25 @@ async function apiPost(body) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+// ============================================================
+// JAN BARCODE CACHE (localStorage + GAS cache_api sheet)
+// ============================================================
+const JAN_LS_PFX = 'stockr_jan_';
+const JAN_LS_TTL = 30 * 24 * 60 * 60 * 1000; // 30日
+
+function getJanLS(bc) {
+  try {
+    const raw = localStorage.getItem(JAN_LS_PFX + bc);
+    if (!raw) return null;
+    const { d, t } = JSON.parse(raw);
+    if (Date.now() - t > JAN_LS_TTL) { localStorage.removeItem(JAN_LS_PFX + bc); return null; }
+    return d;
+  } catch(e) { return null; }
+}
+function setJanLS(bc, data) {
+  try { localStorage.setItem(JAN_LS_PFX + bc, JSON.stringify({ d: data, t: Date.now() })); } catch(e) {}
+}
+
 async function getAllData(force = false) {
   if (!S.url || S.url === 'DEMO') return S.cache;
   const now = Date.now();
@@ -693,7 +726,7 @@ function renderHome() {
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🛒</button>
     </div>
-    <div id="home-list"><div class="loading"><div class="spinner"></div>読み込み中…</div></div>
+    <div id="home-list">${S.cache ? '' : paintHomeListSkeleton()}</div>
     <button class="fab-sub" id="fab-bulk" title="まとめて登録">📋</button>
     <button class="fab" id="fab-add">＋</button>
   `;
@@ -861,74 +894,111 @@ function getUsedVolumeUnits() {
 // APIキーなしでも Open Food Facts (食品) は動作
 // Yahoo!/楽天は設定画面でAPIキーを登録すると有効になる
 async function fetchExternalProductInfo(bc) {
-  const result = { name: '', prices: [], source: [] };
+  // ── 1. localStorageキャッシュ（即時・ネットワーク不要） ──────────
+  const lsHit = getJanLS(bc);
+  if (lsHit) return lsHit;
 
-  // 1. Open Food Facts（キー不要・食品向け）
-  try {
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 4000);
-    const res  = await fetch(
-      `https://world.openfoodfacts.org/api/v0/product/${bc}.json?fields=product_name,product_name_ja,brands`,
-      { signal: ctrl.signal }
-    );
-    const data = await res.json();
-    if (data.status === 1 && data.product) {
-      const p = data.product;
-      const n = p.product_name_ja || p.product_name || p.brands || '';
-      if (n) { result.name = n; result.source.push('Open Food Facts'); }
-    }
-  } catch(e) {}
-
-  // 2. Yahoo!ショッピングAPI（JANコード直接検索・最も精度高）
-  const yahooKey = localStorage.getItem('stockr_yahoo_key');
-  if (yahooKey) {
+  // ── 2. GAS cache_api シート（他端末でも共有） ────────────────────
+  if (S.url && S.url !== 'DEMO') {
     try {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 6000);
-      const res  = await fetch(
-        `https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch?appid=${encodeURIComponent(yahooKey)}&jan_code=${encodeURIComponent(bc)}&results=10&sort=-score`,
-        { signal: ctrl.signal }
-      );
-      const data = await res.json();
-      if (data.hits?.length > 0) {
-        if (!result.name) result.name = data.hits[0].name || '';
-        data.hits.forEach(h => {
-          if (h.price) result.prices.push({ storeName: h.seller?.name || 'Yahoo!ショッピング', price: Number(h.price) });
-        });
-        result.source.push('Yahoo!ショッピング');
+      const gasHit = await apiGet('getApiCache', { jan: bc });
+      if (gasHit?.data) {
+        const d = gasHit.data;
+        const cached = {
+          name:   d.product_name || '',
+          prices: [],
+          source: (d.source || '').split(',').filter(Boolean),
+          image:  d.image_url || '',
+        };
+        if (d.yahoo_price)   cached.prices.push({ storeName: 'Yahoo!ショッピング', price: Number(d.yahoo_price) });
+        if (d.rakuten_price) cached.prices.push({ storeName: '楽天市場',           price: Number(d.rakuten_price) });
+        cached.prices.sort((a,b) => a.price - b.price);
+        setJanLS(bc, cached); // ローカルにも保存して次回即時返却
+        return cached;
       }
     } catch(e) {}
   }
 
-  // 3. 楽天市場API（JANコードをキーワードに検索）
-  const rakutenKey = (localStorage.getItem('stockr_rakuten_key') || '').trim();
-  if (rakutenKey) {
-    try {
+  // ── 3. 外部APIを並列で叩く ───────────────────────────────────────
+  const result = { name: '', prices: [], source: [] };
+
+  const [off, yahoo, rakuten] = await Promise.allSettled([
+    // 3-a. Open Food Facts（キー不要・食品向け）
+    (async () => {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 4000);
+      const res  = await fetch(`https://world.openfoodfacts.org/api/v0/product/${bc}.json?fields=product_name,product_name_ja,brands`, { signal: ctrl.signal });
+      return res.json();
+    })(),
+    // 3-b. Yahoo!ショッピングAPI
+    (async () => {
+      const key = localStorage.getItem('stockr_yahoo_key');
+      if (!key) return null;
       const ctrl = new AbortController();
       setTimeout(() => ctrl.abort(), 6000);
-      const res  = await fetch(
-        `https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?applicationId=${encodeURIComponent(rakutenKey)}&keyword=${encodeURIComponent(bc)}&hits=10&sort=%2BitemPrice&format=json`,
-        { signal: ctrl.signal }
-      );
-      const data = await res.json();
-      if (data.error) {
-        console.warn('[Rakuten API]', data.error, data.error_description);
-        result.rakutenError = data.error_description || data.error;
-      } else if (data.Items?.length > 0) {
-        if (!result.name) {
-          const raw = data.Items[0].Item?.itemName || '';
-          result.name = raw.replace(/【[^】]*】/g,'').replace(/\[[^\]]*\]/g,'').trim();
-        }
-        data.Items.forEach(item => {
-          const it = item.Item;
-          if (it?.itemPrice) result.prices.push({ storeName: it.shopName || '楽天市場', price: Number(it.itemPrice) });
-        });
-        result.source.push('楽天市場');
+      const res = await fetch(`https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch?appid=${encodeURIComponent(key)}&jan_code=${encodeURIComponent(bc)}&results=10&sort=-score`, { signal: ctrl.signal });
+      return res.json();
+    })(),
+    // 3-c. 楽天市場API
+    (async () => {
+      const key = (localStorage.getItem('stockr_rakuten_key') || '').trim();
+      if (!key) return null;
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(`https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?applicationId=${encodeURIComponent(key)}&keyword=${encodeURIComponent(bc)}&hits=10&sort=%2BitemPrice&format=json`, { signal: ctrl.signal });
+      return res.json();
+    })(),
+  ]);
+
+  // Open Food Facts
+  if (off.status === 'fulfilled' && off.value?.status === 1 && off.value.product) {
+    const p = off.value.product;
+    const n = p.product_name_ja || p.product_name || p.brands || '';
+    if (n) { result.name = n; result.source.push('Open Food Facts'); }
+  }
+
+  // Yahoo!ショッピング
+  if (yahoo.status === 'fulfilled' && yahoo.value?.hits?.length > 0) {
+    const hits = yahoo.value.hits;
+    if (!result.name) result.name = hits[0].name || '';
+    hits.forEach(h => { if (h.price) result.prices.push({ storeName: h.seller?.name || 'Yahoo!ショッピング', price: Number(h.price) }); });
+    result.source.push('Yahoo!ショッピング');
+  }
+
+  // 楽天市場
+  if (rakuten.status === 'fulfilled' && rakuten.value) {
+    const d = rakuten.value;
+    if (d.error) {
+      console.warn('[Rakuten API]', d.error, d.error_description);
+      result.rakutenError = d.error_description || d.error;
+    } else if (d.Items?.length > 0) {
+      if (!result.name) {
+        const raw = d.Items[0].Item?.itemName || '';
+        result.name = raw.replace(/【[^】]*】/g,'').replace(/\[[^\]]*\]/g,'').trim();
       }
-    } catch(e) { console.warn('[Rakuten API] fetch error:', e.message); }
+      d.Items.forEach(item => {
+        const it = item.Item;
+        if (it?.itemPrice) result.prices.push({ storeName: it.shopName || '楽天市場', price: Number(it.itemPrice) });
+      });
+      result.source.push('楽天市場');
+    }
   }
 
   result.prices.sort((a, b) => a.price - b.price);
+
+  // ── 4. キャッシュに保存（次回以降の高速化） ──────────────────────
+  setJanLS(bc, result);
+  if (S.url && S.url !== 'DEMO' && result.name) {
+    apiPost({
+      action:        'setApiCache',
+      jan_code:       bc,
+      product_name:   result.name,
+      yahoo_price:    result.prices.find(p => p.storeName?.includes('Yahoo'))?.price  || '',
+      rakuten_price:  result.prices.find(p => p.storeName?.includes('楽天'))?.price   || '',
+      source:         result.source.join(','),
+    }).catch(() => {});
+  }
+
   return result;
 }
 
@@ -1165,6 +1235,17 @@ function showShoppingList() {
   ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
 }
 
+function paintHomeListSkeleton() {
+  return Array(5).fill(0).map(() => `
+    <div class="product-item" style="pointer-events:none;">
+      <div class="pi-info">
+        <div class="pi-name"><div class="skel" style="width:55%;height:15px;"></div></div>
+        <div class="pi-meta" style="margin-top:6px;"><div class="skel" style="width:35%;height:11px;"></div></div>
+      </div>
+      <div class="pi-qty-wrap"><div class="skel" style="width:36px;height:28px;border-radius:4px;margin:0 auto;"></div></div>
+      <div class="pi-btns"></div>
+    </div>`).join('');
+}
 function paintHomeList() {
   const el = document.getElementById('home-list'); if (!el) return;
   const data = S.cache;
@@ -2189,7 +2270,7 @@ function bindSettings() {
 // ============================================================
 // INIT
 // ============================================================
-// 前回のキャッシュを即座に読み込んで起動を高速化
+// Step1: 前回のlocalStorageキャッシュを即座に読み込んで起動を高速化
 if (S.url && S.url !== 'DEMO') {
   try {
     const stored = localStorage.getItem('stockr_cache');
@@ -2200,11 +2281,21 @@ if (S.url && S.url !== 'DEMO') {
   } catch(e) {}
 }
 render();
-// バックグラウンドで最新データを取得してキャッシュを更新
+
+// Step2: バックグラウンドでGASウォームアップ + データ最新化
 if (S.url && S.url !== 'DEMO') {
-  getAllData(true).then(d => {
-    if (d?.ok) { S.cache = d; paintHomeList?.(); }
-  });
+  const cacheAge = Date.now() - S.cacheTime;
+  const FRESH_TTL = 3 * 60 * 1000; // 3分以内なら再取得不要
+
+  if (!S.cache || cacheAge > FRESH_TTL) {
+    // キャッシュが古い or ない → GASから最新データ取得
+    getAllData(true).then(d => {
+      if (d?.ok) { S.cache = d; paintHomeList?.(); }
+    });
+  } else {
+    // キャッシュが新鮮 → GASをウォームアップだけして次回を高速化
+    fetch(`${S.url}?action=ping`).catch(() => {});
+  }
 }
 </script>
 </body>
