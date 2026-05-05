@@ -1355,8 +1355,8 @@ function paintHomeList() {
       if (e.target.closest('.qbtn')) return;
       go('action', {activeProduct:p, actionMode:'out', actionInput:'', scannedBarcode:'', scannedStore:'', scannedPrice:''});
     });
-    row.querySelector('.qp').addEventListener('click', e => { e.stopPropagation(); quickStock(p,'in',1); });
-    row.querySelector('.qm').addEventListener('click', e => { e.stopPropagation(); quickStock(p,'out',1); });
+    row.querySelector('.qp')?.addEventListener('click', e => { e.stopPropagation(); quickStock(p,'in',1); });
+    row.querySelector('.qm')?.addEventListener('click', e => { e.stopPropagation(); quickStock(p,'out',1); });
   });
   document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; document.getElementById('q').value=''; paintHomeList(); });
 }
