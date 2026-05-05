@@ -435,6 +435,15 @@ function setJanLS(bc, data) {
   try { localStorage.setItem(JAN_LS_PFX + bc, JSON.stringify({ d: data, t: Date.now() })); } catch(e) {}
 }
 
+// ─── ローカルキャッシュ即時保存 ──────────────────────────────────
+function saveLocalCache() {
+  try { localStorage.setItem('stockr_cache', JSON.stringify({data: S.cache, time: Date.now()})); } catch(e) {}
+}
+// バックグラウンドでGASから最新データ取得（await不要・UI更新）
+function bgRefresh() {
+  getAllData(true).then(d => { if (d?.ok) { S.cache = d; paintHomeList?.(); } }).catch(()=>{});
+}
+
 async function getAllData(force = false) {
   if (!S.url || S.url === 'DEMO') return S.cache;
   const now = Date.now();
@@ -722,7 +731,7 @@ function bindSetup() {
 function renderHome() {
   return `
     <div class="search-wrap">
-      <input class="search-input" id="q" type="search" placeholder="🔍 商品名で検索..." value="${esc(S.query)}">
+      <input class="search-input" id="q" type="search" placeholder="🔍 検索（スペースで複数キーワード）" value="${esc(S.query)}">
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🛒</button>
     </div>
@@ -792,7 +801,13 @@ function showPriceRecord(p) {
         const r = await apiPost({action:'upsertBarcode', barcode:bc, group_id:p.group_id, store_name:store, price, memo});
         if (!r.ok) { toast(r.error||'エラー','err'); return; }
         toast('価格を記録しました');
-        const fresh = await getAllData(true); if (fresh?.ok) S.cache = fresh;
+        if (S.cache) {
+          const existBc = (S.cache.barcodes||[]).find(b => String(b.group_id)===String(p.group_id) && b.store_name===store);
+          if (existBc) { existBc.price = price; existBc.memo = memo; }
+          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bc, group_id:p.group_id, store_name:store, price, memo, created_at:new Date().toLocaleString('ja-JP')});
+        }
+        saveLocalCache();
+        bgRefresh();
       }
       ov.remove();
       go('action', {activeProduct: buildProducts(S.cache).find(x=>x.group_id===p.group_id) || p});
@@ -847,27 +862,43 @@ function showBulkAdd() {
     document.getElementById('bulk-exec').addEventListener('click', async () => {
       const btn = document.getElementById('bulk-exec');
       btn.disabled = true; btn.textContent = '登録中…';
-      let ok = 0, err = 0;
-      for (const item of items) {
-        try {
-          const gid = `prod_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
-          if (S.url === 'DEMO') {
+      try {
+        if (S.url === 'DEMO') {
+          for (const item of items) {
+            const gid = `prod_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
             S.cache.products.push({group_id:gid, name:item.name, unit:item.unit, volume:0, volume_unit:'', created_at:new Date().toLocaleString('ja-JP')});
-            S.cache.inventory.push({group_id:gid, qty:item.qty, alert_threshold:5, updated_at:new Date().toLocaleString('ja-JP')});
-            ok++;
-          } else {
-            const r = await apiPost({action:'upsertProduct', group_id:gid, name:item.name, unit:item.unit, volume:0, volume_unit:''});
-            if (!r.ok) { err++; continue; }
-            await apiPost({action:'setAlert', group_id:gid, threshold:5});
-            if (item.qty > 0) await apiPost({action:'stockAction', group_id:gid, product_name:item.name, barcode:'', move:'set', qty:item.qty, user:S.user});
-            ok++;
+            S.cache.inventory.push({group_id:gid, qty:item.qty, alert_threshold:5, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
           }
-        } catch(e) { err++; }
-      }
-      const fresh = await getAllData(true); if (fresh?.ok) S.cache = fresh;
-      ov.remove();
-      toast(err ? `${ok}件登録、${err}件失敗` : `${ok}件を登録しました`);
-      paintHomeList();
+          ov.remove();
+          toast(`${items.length}件を登録しました（デモ）`);
+          paintHomeList();
+        } else {
+          const payload = items.map(item => ({
+            group_id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+            name: item.name, unit: item.unit, volume: 0, volume_unit: '',
+            initial_qty: item.qty, alert_threshold: 5, alert_mode: 'threshold', user: S.user
+          }));
+          const r = await apiPost({action:'bulkUpsert', items: payload});
+          if (r.ok) {
+            if (S.cache) {
+              S.cache.products = S.cache.products||[];
+              S.cache.inventory = S.cache.inventory||[];
+              for (const item of payload) {
+                S.cache.products.push({group_id:item.group_id, name:item.name, unit:item.unit, volume:0, volume_unit:'', created_at:new Date().toLocaleString('ja-JP')});
+                S.cache.inventory.push({group_id:item.group_id, qty:item.initial_qty, alert_threshold:5, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
+              }
+              saveLocalCache();
+            }
+            ov.remove();
+            toast(r.failed ? `${r.succeeded}件登録、${r.failed}件失敗` : `${r.succeeded}件を登録しました`);
+            paintHomeList();
+            bgRefresh();
+          } else {
+            toast(r.error||'登録に失敗しました', 'err');
+            btn.disabled = false; btn.textContent = `✅ ${items.length}件を一括登録`;
+          }
+        }
+      } catch(e) { toast('通信エラー: '+e.message,'err'); btn.disabled=false; btn.textContent=`✅ ${items.length}件を一括登録`; }
     });
   });
 }
@@ -1072,12 +1103,12 @@ function calcConsumptionStats(p) {
     }
     if (intervals.length) {
       purchaseCycleDays = intervals.reduce((s,d) => s+d, 0) / intervals.length;
-      const totalDays = (new Date(inHist[inHist.length-1].timestamp) - new Date(inHist[0].timestamp)) / 86400000;
+      // 1回の購入平均数量 ÷ 購入サイクル日数 = 1日あたりの消費量
       const totalBought = inHist.reduce((s,h) => s + (Number(h.qty)||0), 0);
-      const consumed = totalBought - (Number(inHist[inHist.length-1].qty)||0);
-      if (totalDays > 0 && consumed > 0) {
-        const perDayIn = consumed / totalDays;
-        daysFromIn = Math.floor(p.qty / perDayIn);
+      const avgQtyPerPurchase = totalBought / inHist.length;
+      const perDayIn = avgQtyPerPurchase / purchaseCycleDays;
+      if (perDayIn > 0) {
+        daysFromIn = Math.round(p.qty / perDayIn);
         if (avgDaysPerUnit === null) avgDaysPerUnit = 1 / perDayIn;
       }
     }
@@ -1253,7 +1284,13 @@ function paintHomeList() {
   if (!data.ok) { el.innerHTML = `<div class="empty"><div class="ei">⚠️</div><p>${esc(data.error||'取得エラー')}</p></div>`; return; }
 
   let prods = buildProducts(data);
-  if (S.query) { const q = S.query.toLowerCase(); prods = prods.filter(p => p.name.toLowerCase().includes(q)); }
+  if (S.query) {
+    const terms = S.query.toLowerCase().split(/\s+/).filter(Boolean);
+    prods = prods.filter(p => {
+      const hay = [p.name, p.unit, p.volume_unit].join(' ').toLowerCase();
+      return terms.every(t => hay.includes(t));
+    });
+  }
   prods.sort((a,b) => {
     if (S.sort==='name')     return a.name.localeCompare(b.name,'ja');
     if (S.sort==='qty_asc')  return a.qty - b.qty;
@@ -1348,8 +1385,12 @@ async function quickStock(p, action, qty) {
       const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name, barcode:'', move:action, qty, user:S.user});
       if (res.ok) {
         toast(`${p.name}: ${action==='in'?'+':'-'}${qty}${p.unit}`);
-        const fresh = await getAllData(true); if (fresh?.ok) S.cache = fresh;
+        const inv = (S.cache?.inventory||[]).find(r => String(r.group_id)===String(p.group_id));
+        if (inv) { inv.qty = res.afterQty ?? (action==='in' ? (Number(inv.qty)+qty) : Math.max(0, Number(inv.qty)-qty)); inv.updated_at = new Date().toLocaleString('ja-JP'); }
+        if (S.cache) S.cache.history = [{timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:'', action, qty, after_qty:inv?.qty??0, store_name:'', price:'', memo:'', user:S.user}, ...(S.cache.history||[])].slice(0,200);
+        saveLocalCache();
         paintHomeList();
+        bgRefresh();
       } else toast(res.error||'エラー','err');
     }
   } catch(e) { toast('通信エラー: '+e.message,'err'); }
@@ -1777,9 +1818,23 @@ async function doStockAction(p) {
     const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name,
       barcode:S.scannedBarcode||'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, store_name:storeName, price, memo, user:S.user});
     if (res.ok) {
+      // ローカルキャッシュを即時更新（GAS再取得を待たない）
+      const inv = (S.cache?.inventory||[]).find(r => String(r.group_id)===String(p.group_id));
+      if (inv) inv.qty = res.afterQty;
+      if (S.cache) {
+        S.cache.history = [{timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name,
+          barcode:S.scannedBarcode||'', action:S.actionMode, qty, after_qty:res.afterQty,
+          store_name:storeName, price, memo, user:S.user}, ...(S.cache.history||[])].slice(0,200);
+        if (S.actionMode==='in' && storeName && price) {
+          const existBc = (S.cache.barcodes||[]).find(b=>String(b.group_id)===String(p.group_id)&&b.store_name===storeName);
+          if (existBc) existBc.price = price;
+          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:S.scannedBarcode||`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')});
+        }
+      }
+      saveLocalCache();
       toast(`${p.name} → ${res.afterQty}${p.unit}${lotNote}`);
-      const fresh = await getAllData(true); if(fresh?.ok) S.cache=fresh;
       S.actionInput=''; go('home');
+      bgRefresh();
     } else toast(res.error||'エラー','err');
   } catch(e) { toast('通信エラー: '+e.message,'err'); }
 }
@@ -2050,7 +2105,24 @@ async function saveProduct() {
       }
     }
     toast(isEdit?'更新しました':'登録しました');
-    const fresh=await getAllData(true); if(fresh?.ok) S.cache=fresh;
+    if (S.cache) {
+      if (isEdit) {
+        const prod = (S.cache.products||[]).find(p => String(p.group_id)===String(gid));
+        if (prod) Object.assign(prod, {name, unit, volume, volume_unit:volUnit, track_stock:trackStock, manual_days_per_unit:manualDays});
+        const inv2 = (S.cache.inventory||[]).find(p => String(p.group_id)===String(gid));
+        if (inv2) { inv2.alert_threshold=thr; inv2.alert_mode=alertMode; inv2.updated_at=new Date().toLocaleString('ja-JP'); }
+      } else {
+        const qty2 = parseInt(document.getElementById('a-qty')?.value)||0;
+        S.cache.products = S.cache.products||[];
+        S.cache.inventory = S.cache.inventory||[];
+        S.cache.products.push({group_id:gid, name, unit, volume, volume_unit:volUnit, track_stock:trackStock, manual_days_per_unit:manualDays, created_at:new Date().toLocaleString('ja-JP')});
+        S.cache.inventory.push({group_id:gid, qty:qty2, alert_threshold:thr, alert_mode:alertMode, updated_at:new Date().toLocaleString('ja-JP')});
+        const bc2 = document.getElementById('a-bc')?.value?.trim();
+        if (bc2) { const store2=document.getElementById('a-store')?.value?.trim()||''; const price2=document.getElementById('a-price')?.value?.trim()||''; (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bc2, group_id:gid, store_name:store2, price:price2, memo:'', created_at:new Date().toLocaleString('ja-JP')}); }
+      }
+      saveLocalCache();
+    }
+    bgRefresh();
     go('home');
   } catch(e) {
     toast('通信エラー: '+e.message,'err');
