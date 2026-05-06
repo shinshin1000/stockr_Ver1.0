@@ -1125,6 +1125,36 @@ function calcConsumptionStats(p) {
 // 後方互換
 function calcDaysRemaining(p) { return calcConsumptionStats(p).bestDays; }
 
+// ── 購入サイクル自動計算 ───────────────────────────────────────────
+// 入庫履歴から「何日ごとに購入しているか」を算出し、次回予定日と偏差を返す
+function calcPurchaseCycle(p) {
+  if (!p.track_stock) return null;
+  const hist = (S.cache?.history || [])
+    .filter(h => String(h.group_id) === String(p.group_id) && h.action === 'in')
+    .sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
+  if (hist.length < 2) return null;
+  const intervals = [];
+  for (let i = 1; i < hist.length; i++) {
+    const iv = (new Date(hist[i].timestamp) - new Date(hist[i-1].timestamp)) / 86400000;
+    if (iv >= 1) intervals.push(iv);
+  }
+  if (!intervals.length) return null;
+  const avgCycleDays = intervals.reduce((s,d) => s+d, 0) / intervals.length;
+  const lastIn = new Date(hist[hist.length-1].timestamp);
+  const nextDue = new Date(lastIn.getTime() + avgCycleDays * 86400000);
+  const daysUntilDue = Math.round((nextDue - new Date()) / 86400000);
+  const totalQty = hist.reduce((s,h) => s + (Number(h.qty)||0), 0);
+  const avgQtyPerPurchase = totalQty / hist.length;
+  const suggestedDaysPerUnit = avgQtyPerPurchase > 0 ? Math.round((avgCycleDays / avgQtyPerPurchase) * 10) / 10 : null;
+  let deviationPct = null;
+  if (p.manual_days_per_unit > 0 && suggestedDaysPerUnit) {
+    deviationPct = Math.round(((suggestedDaysPerUnit - p.manual_days_per_unit) / p.manual_days_per_unit) * 100);
+  }
+  return { avgCycleDays: Math.round(avgCycleDays), lastIn, nextDue, daysUntilDue,
+           histCount: hist.length, avgQtyPerPurchase: Math.round(avgQtyPerPurchase*10)/10,
+           suggestedDaysPerUnit, deviationPct };
+}
+
 // 商品ごとの店舗別価格履歴を集計（購入履歴 + バーコードテーブル）
 function calcStorePrices(p) {
   const storeMap = {};
@@ -1317,6 +1347,12 @@ function paintHomeList() {
       const stats = calcConsumptionStats(p);
       const d = stats.bestDays;
       const daysHtml = (!priceOnly && d !== null) ? (() => { const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })() : '';
+      const cycle = priceOnly ? null : calcPurchaseCycle(p);
+      const cycleHtml = cycle && cycle.daysUntilDue < 0
+        ? ` · <span style="color:var(--warn);font-weight:600;">🔔 購入時期</span>`
+        : (cycle && cycle.daysUntilDue <= 7
+          ? ` · <span style="color:var(--warn);">📅 あと${cycle.daysUntilDue}日で次回</span>`
+          : '');
       return `
       <div class="product-item ${p.isLow?'low':''}" data-gid="${esc(p.group_id)}">
         <div class="pi-info">
@@ -1330,7 +1366,7 @@ function paintHomeList() {
             ${p.unitPrice ? ` · <span style="color:var(--accent);">¥${p.unitPrice.toFixed(1)}/${esc(p.volume_unit||p.unit)}</span>` : ''}
             ${!priceOnly && p.stockValue ? ` · 計¥${Math.round(p.stockValue).toLocaleString()}` : ''}
             ${!priceOnly && !p.latestPrice ? `しきい値: ${p.alert_threshold}${esc(p.unit)}` : ''}
-            ${daysHtml}
+            ${daysHtml}${cycleHtml}
             ${priceOnly ? '' : ` · ${relDate(p.updated_at)}`}
           </div>
         </div>
@@ -1347,16 +1383,15 @@ function paintHomeList() {
   }
   el.innerHTML = html;
 
-  // bind product rows
-  el.querySelectorAll('.product-item').forEach(row => {
-    const gid = row.dataset.gid;
-    const p = prods.find(x=>x.group_id===gid);
-    row.addEventListener('click', e => {
-      if (e.target.closest('.qbtn')) return;
-      go('action', {activeProduct:p, actionMode:'out', actionInput:'', scannedBarcode:'', scannedStore:'', scannedPrice:''});
-    });
-    row.querySelector('.qp')?.addEventListener('click', e => { e.stopPropagation(); quickStock(p,'in',1); });
-    row.querySelector('.qm')?.addEventListener('click', e => { e.stopPropagation(); quickStock(p,'out',1); });
+  // イベントデリゲーション（per-rowのforEach廃止 → 親要素で一括処理、priceOnly商品があっても確実に動作）
+  el.addEventListener('click', e => {
+    const row = e.target.closest('.product-item');
+    if (!row) return;
+    const p = prods.find(x => String(x.group_id) === row.dataset.gid);
+    if (!p) return;
+    if (e.target.closest('.qp')) { quickStock(p, 'in',  1); return; }
+    if (e.target.closest('.qm')) { quickStock(p, 'out', 1); return; }
+    go('action', {activeProduct:p, actionMode:'out', actionInput:'', scannedBarcode:'', scannedStore:'', scannedPrice:''});
   });
   document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; document.getElementById('q').value=''; paintHomeList(); });
 }
@@ -1407,8 +1442,15 @@ function showSortModal() {
   document.body.appendChild(ov);
   ov.addEventListener('click', e => {
     const b = e.target.closest('.so');
-    if (b) { S.sort=b.dataset.id; localStorage.setItem('stockr_sort',S.sort); document.getElementById('sort-btn').textContent=sortLabel(); paintHomeList(); }
-    if (e.target===ov||b) ov.remove();
+    if (b) {
+      // 選択ボタンを即座に強調表示
+      ov.querySelectorAll('.so').forEach(btn => {
+        btn.className = `btn ${btn === b ? 'btn-primary' : 'btn-secondary'} so`;
+      });
+      S.sort=b.dataset.id; localStorage.setItem('stockr_sort',S.sort);
+      document.getElementById('sort-btn').textContent=sortLabel(); paintHomeList();
+      setTimeout(() => ov.remove(), 150); // 色変化を見せてから閉じる
+    } else if (e.target===ov) { ov.remove(); }
   });
 }
 
@@ -1637,6 +1679,7 @@ function renderAction() {
       <div class="divider"></div>
       <div id="act-extras"></div>
       <div id="act-price-hist"></div>
+      <div id="act-cycle"></div>
       <div class="divider"></div>
       <div class="product-actions-row">
         <span style="font-size:12px;color:var(--muted);margin-right:auto;">この商品：</span>
@@ -1746,6 +1789,39 @@ function bindAction() {
   document.getElementById('act-price-hist').innerHTML = `<div style="padding:0 2px 8px;">${ph || ''}${extBtn}</div>`;
   if (bcs.length) {
     document.getElementById('ext-price-btn')?.addEventListener('click', () => showExternalPrices(p, bcs[0].barcode));
+  }
+
+  // 購入サイクルセクション
+  const cycle = calcPurchaseCycle(p);
+  const cycleEl = document.getElementById('act-cycle');
+  if (cycleEl && cycle) {
+    const nextStr = cycle.nextDue.toLocaleDateString('ja-JP', {month:'numeric', day:'numeric'});
+    const overdue = cycle.daysUntilDue < 0;
+    const showDev = cycle.deviationPct !== null && Math.abs(cycle.deviationPct) >= 20;
+    cycleEl.innerHTML = `
+      <div style="padding:12px 16px;background:var(--surface2);border-radius:10px;margin:8px 0;font-size:13px;">
+        <div style="font-weight:700;margin-bottom:6px;color:var(--accent);">🔄 購入サイクル（自動計算）</div>
+        <div style="color:var(--muted);margin-bottom:4px;">約${cycle.avgCycleDays}日ごとに購入（${cycle.histCount}回の記録）</div>
+        <div style="${overdue ? 'color:var(--warn);font-weight:600;' : ''}">
+          ${overdue
+            ? `⚠️ 次回購入時期を${Math.abs(cycle.daysUntilDue)}日過ぎています`
+            : `📅 次回目安: ${nextStr}（あと${cycle.daysUntilDue}日）`}
+        </div>
+        ${showDev ? `<div style="color:var(--warn);margin-top:4px;font-size:12px;">実績と手動設定が${cycle.deviationPct > 0 ? '+' : ''}${cycle.deviationPct}%ずれています</div>` : ''}
+        ${cycle.suggestedDaysPerUnit ? `<button class="btn btn-secondary" id="apply-cycle" style="margin-top:8px;font-size:12px;padding:7px 12px;">📊 計算値（${cycle.suggestedDaysPerUnit}日/個）を消費日数に設定</button>` : ''}
+      </div>`;
+    document.getElementById('apply-cycle')?.addEventListener('click', async () => {
+      if (!cycle.suggestedDaysPerUnit) return;
+      const r = await apiPost({action:'upsertProduct', group_id:p.group_id, name:p.name, unit:p.unit,
+        volume:p.volume||0, volume_unit:p.volume_unit||'', track_stock:p.track_stock?1:0,
+        manual_days_per_unit:cycle.suggestedDaysPerUnit});
+      if (r.ok) {
+        toast(`消費日数を${cycle.suggestedDaysPerUnit}日/個に設定しました`);
+        const prod = (S.cache?.products||[]).find(x => String(x.group_id)===String(p.group_id));
+        if (prod) prod.manual_days_per_unit = cycle.suggestedDaysPerUnit;
+        saveLocalCache(); bgRefresh();
+      } else toast(r.error||'エラー','err');
+    });
   }
 }
 
