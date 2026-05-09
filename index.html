@@ -373,6 +373,7 @@ const S = {
   sort:       localStorage.getItem('stockr_sort')        || 'name',
   screen: 'home',
   query:  '',
+  filterMode: '', // '' = 全件 / 'soon' = 20日以内
   histFilter: 'all',
   // Stock action
   activeProduct: null,
@@ -489,8 +490,17 @@ function buildProducts(data) {
     const volume = Number(p.volume) || 0;
     const unitPrice  = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
     const stockValue = latestPrice > 0 ? qty * latestPrice : null;
-    const isLow = alertMode === 'threshold' && trackStock && qty <= thr;
-    return { ...p, qty, alert_threshold: thr, alert_mode: alertMode, track_stock: trackStock, manual_days_per_unit: manualDaysPerUnit, updated_at: inv.updated_at || '', isLow, latestPrice, latestStore, volume, unitPrice, stockValue };
+    // 仮想消費量: manual_days_per_unitが設定されている場合、最終更新からの経過日数で自動減算
+    const virtualQty = (() => {
+      if (!manualDaysPerUnit || manualDaysPerUnit <= 0 || !inv.updated_at) return null;
+      const lastUpdate = new Date(inv.updated_at);
+      if (isNaN(lastUpdate.getTime())) return null;
+      const daysPassed = (Date.now() - lastUpdate.getTime()) / 86400000;
+      return Math.round(Math.max(0, qty - daysPassed / manualDaysPerUnit) * 10) / 10;
+    })();
+    const displayQty = virtualQty !== null ? virtualQty : qty;
+    const isLow = alertMode === 'threshold' && trackStock && displayQty <= thr;
+    return { ...p, qty, displayQty, virtualQty, alert_threshold: thr, alert_mode: alertMode, track_stock: trackStock, manual_days_per_unit: manualDaysPerUnit, updated_at: inv.updated_at || '', isLow, latestPrice, latestStore, volume, unitPrice, stockValue };
   });
 }
 
@@ -734,6 +744,7 @@ function renderHome() {
       <input class="search-input" id="q" type="search" placeholder="🔍 検索（スペースで複数キーワード）" value="${esc(S.query)}">
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🛒</button>
+      <button class="sort-btn" id="soon-btn" title="20日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
     </div>
     <div id="home-list">${S.cache ? '' : paintHomeListSkeleton()}</div>
     <button class="fab-sub" id="fab-bulk" title="まとめて登録">📋</button>
@@ -750,6 +761,12 @@ async function bindHome() {
   document.getElementById('q').addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
   document.getElementById('sort-btn').addEventListener('click', showSortModal);
   document.getElementById('shop-list-btn').addEventListener('click', showShoppingList);
+  document.getElementById('soon-btn').addEventListener('click', () => {
+    S.filterMode = S.filterMode === 'soon' ? '' : 'soon';
+    const btn = document.getElementById('soon-btn');
+    if (btn) btn.style.cssText = `font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}`;
+    paintHomeList();
+  });
   // キャッシュがあれば即表示、バックグラウンドで最新を取得
   if (S.cache) { paintHomeList(); }
   getAllData().then(d => { if (d?.ok) { S.cache = d; paintHomeList(); } });
@@ -1082,6 +1099,8 @@ function calcConsumptionStats(p) {
   const outHist = hist.filter(h => h.action === 'out').sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
   const inHist  = hist.filter(h => h.action === 'in').sort((a,b) => new Date(a.timestamp) - new Date(b.timestamp));
   let daysFromOut = null, daysFromIn = null, avgDaysPerUnit = null, purchaseCycleDays = null;
+  // 仮想消費量を優先（manual_days_per_unit設定時はdisplayQtyを使う）
+  const dQty = p.displayQty !== undefined ? p.displayQty : p.qty;
 
   // 出庫ペースから計算（より信頼性が高い）
   if (outHist.length >= 2) {
@@ -1089,7 +1108,7 @@ function calcConsumptionStats(p) {
     const totalOut = outHist.reduce((s,h) => s + (Number(h.qty)||0), 0);
     if (days >= 1 && totalOut > 0) {
       const perDay = totalOut / days;
-      daysFromOut = Math.floor(p.qty / perDay);
+      daysFromOut = Math.floor(dQty / perDay);
       avgDaysPerUnit = 1 / perDay;
     }
   }
@@ -1103,21 +1122,20 @@ function calcConsumptionStats(p) {
     }
     if (intervals.length) {
       purchaseCycleDays = intervals.reduce((s,d) => s+d, 0) / intervals.length;
-      // 1回の購入平均数量 ÷ 購入サイクル日数 = 1日あたりの消費量
       const totalBought = inHist.reduce((s,h) => s + (Number(h.qty)||0), 0);
       const avgQtyPerPurchase = totalBought / inHist.length;
       const perDayIn = avgQtyPerPurchase / purchaseCycleDays;
       if (perDayIn > 0) {
-        daysFromIn = Math.round(p.qty / perDayIn);
+        daysFromIn = Math.round(dQty / perDayIn);
         if (avgDaysPerUnit === null) avgDaysPerUnit = 1 / perDayIn;
       }
     }
   }
 
   const estBestDays = daysFromOut ?? daysFromIn;
-  // 手動設定の消費日数があればそちらを優先
+  // 手動設定の消費日数があればそちらを優先（仮想消費量ベースで計算）
   const manualDays = Number(p.manual_days_per_unit) || 0;
-  const manualBestDays = manualDays > 0 ? Math.round(p.qty * manualDays) : null;
+  const manualBestDays = manualDays > 0 ? Math.round(dQty * manualDays) : null;
   const bestDays = manualBestDays ?? estBestDays;
   return { daysFromOut, daysFromIn, avgDaysPerUnit, purchaseCycleDays, bestDays, manualBestDays, estBestDays };
 }
@@ -1321,16 +1339,35 @@ function paintHomeList() {
       return terms.every(t => hay.includes(t));
     });
   }
-  prods.sort((a,b) => {
-    if (S.sort==='name')     return a.name.localeCompare(b.name,'ja');
-    if (S.sort==='qty_asc')  return a.qty - b.qty;
-    if (S.sort==='qty_desc') return b.qty - a.qty;
-    if (S.sort==='updated')  return new Date(b.updated_at)-new Date(a.updated_at);
-    return 0;
-  });
+  // ⏰ 20日以内フィルター
+  if (S.filterMode === 'soon') {
+    prods = prods.filter(p => {
+      if (!p.track_stock) return false;
+      const d = calcConsumptionStats(p).bestDays;
+      return d !== null && d <= 20;
+    });
+    // 残り日数が少ない順に並べる
+    prods.sort((a,b) => (calcConsumptionStats(a).bestDays??999) - (calcConsumptionStats(b).bestDays??999));
+  } else {
+    prods.sort((a,b) => {
+      if (S.sort==='name')     return a.name.localeCompare(b.name,'ja');
+      if (S.sort==='qty_asc')  return a.displayQty - b.displayQty;
+      if (S.sort==='qty_desc') return b.displayQty - a.displayQty;
+      if (S.sort==='updated')  return new Date(b.updated_at)-new Date(a.updated_at);
+      return 0;
+    });
+  }
 
   const low = prods.filter(p=>p.isLow);
   let html = '';
+  // ⏰フィルター中はチップを表示
+  if (S.filterMode === 'soon') {
+    html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 4px 10px;">
+      <span style="background:var(--warn);color:var(--bg);font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;">⏰ 20日以内</span>
+      <span style="font-size:12px;color:var(--muted);">${prods.length}件</span>
+      <button id="clear-filter" style="margin-left:auto;font-size:12px;color:var(--muted);background:none;border:1px solid var(--border);border-radius:8px;cursor:pointer;padding:4px 10px;">✕ 解除</button>
+    </div>`;
+  }
 
   if (low.length) {
     html += `<div class="alert-banner" id="ab">
@@ -1340,7 +1377,7 @@ function paintHomeList() {
     </div>`;
   }
   if (!prods.length) {
-    html += `<div class="empty"><div class="ei">📦</div><p>${S.query?'該当する商品が見つかりません':'商品がまだ登録されていません<br>＋ ボタンから追加してください'}</p></div>`;
+    html += `<div class="empty"><div class="ei">${S.filterMode==='soon'?'🎉':'📦'}</div><p>${S.filterMode==='soon'?'20日以内に切れる商品はありません':S.query?'該当する商品が見つかりません':'商品がまだ登録されていません<br>＋ ボタンから追加してください'}</p></div>`;
   } else {
     html += prods.map(p => {
       const priceOnly = !p.track_stock;
@@ -1373,7 +1410,10 @@ function paintHomeList() {
         <div class="pi-qty-wrap">
           ${priceOnly
             ? `<div class="pi-qty" style="font-size:13px;color:var(--muted);">💰</div><div class="pi-unit">価格</div>`
-            : `<div class="pi-qty ${p.isLow?'low':''}">${p.qty}</div><div class="pi-unit">${esc(p.unit)}</div>`}
+            : `<div class="pi-qty ${p.isLow?'low':''}" style="${p.virtualQty!==null?'font-size:18px;':''}">
+                ${p.virtualQty !== null ? p.displayQty.toFixed(1) : p.qty}
+              </div>
+              <div class="pi-unit">${esc(p.unit)}${p.virtualQty!==null?'<span style="font-size:9px;color:var(--warn);display:block;line-height:1;">推定</span>':''}</div>`}
         </div>
         <div class="pi-btns">
           ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
@@ -1385,6 +1425,13 @@ function paintHomeList() {
 
   // イベントデリゲーション（per-rowのforEach廃止 → 親要素で一括処理、priceOnly商品があっても確実に動作）
   el.addEventListener('click', e => {
+    // ⏰フィルター解除ボタン
+    if (e.target.id === 'clear-filter') {
+      S.filterMode = '';
+      const btn = document.getElementById('soon-btn');
+      if (btn) btn.style.cssText = 'font-size:16px;padding:9px 10px;';
+      paintHomeList(); return;
+    }
     const row = e.target.closest('.product-item');
     if (!row) return;
     const p = prods.find(x => String(x.group_id) === row.dataset.gid);
