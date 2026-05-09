@@ -480,7 +480,7 @@ function buildProducts(data) {
   return (data.products || []).map(p => {
     const inv      = invMap[p.group_id] || {};
     const qty      = Number(inv.qty) || 0;
-    const thr      = (inv.alert_threshold != null && inv.alert_threshold !== '') ? Number(inv.alert_threshold) : 5;
+    const thr      = (inv.alert_threshold != null && inv.alert_threshold !== '') ? Number(inv.alert_threshold) : 0;
     const alertMode = String(inv.alert_mode || 'threshold');
     const trackStock = (p.track_stock === '' || p.track_stock == null) ? true : (Number(p.track_stock) !== 0);
     const manualDaysPerUnit = Number(p.manual_days_per_unit) || 0;
@@ -867,7 +867,7 @@ function showBulkAdd() {
           for (const item of items) {
             const gid = `prod_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
             S.cache.products.push({group_id:gid, name:item.name, unit:item.unit, volume:0, volume_unit:'', created_at:new Date().toLocaleString('ja-JP')});
-            S.cache.inventory.push({group_id:gid, qty:item.qty, alert_threshold:5, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
+            S.cache.inventory.push({group_id:gid, qty:item.qty, alert_threshold:0, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
           }
           ov.remove();
           toast(`${items.length}件を登録しました（デモ）`);
@@ -876,7 +876,7 @@ function showBulkAdd() {
           const payload = items.map(item => ({
             group_id: `prod_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
             name: item.name, unit: item.unit, volume: 0, volume_unit: '',
-            initial_qty: item.qty, alert_threshold: 5, alert_mode: 'threshold', user: S.user
+            initial_qty: item.qty, alert_threshold: 0, alert_mode: 'threshold', user: S.user
           }));
           const r = await apiPost({action:'bulkUpsert', items: payload});
           if (r.ok) {
@@ -885,7 +885,7 @@ function showBulkAdd() {
               S.cache.inventory = S.cache.inventory||[];
               for (const item of payload) {
                 S.cache.products.push({group_id:item.group_id, name:item.name, unit:item.unit, volume:0, volume_unit:'', created_at:new Date().toLocaleString('ja-JP')});
-                S.cache.inventory.push({group_id:item.group_id, qty:item.initial_qty, alert_threshold:5, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
+                S.cache.inventory.push({group_id:item.group_id, qty:item.initial_qty, alert_threshold:0, alert_mode:'threshold', updated_at:new Date().toLocaleString('ja-JP')});
               }
               saveLocalCache();
             }
@@ -2006,7 +2006,7 @@ function renderAdd() {
         <div id="thr-group" style="${alertMode==='threshold'?'':'display:none'}">
           <div class="form-group">
             <label class="form-label">アラートしきい値</label>
-            <input class="form-input" id="a-thr" type="number" placeholder="5" value="${p?.alert_threshold??5}" inputmode="numeric">
+            <input class="form-input" id="a-thr" type="number" placeholder="0" value="${p?.alert_threshold??0}" inputmode="numeric">
             <p class="form-hint">この数以下になったら一覧でハイライトされます</p>
           </div>
         </div>
@@ -2113,7 +2113,7 @@ async function saveProduct() {
   const name       = document.getElementById('a-name').value.trim();
   const unit       = document.getElementById('a-unit').value.trim() || '個';
   const thrStr     = document.getElementById('a-thr')?.value?.trim() ?? '';
-  const thr        = thrStr !== '' ? Math.max(0, parseInt(thrStr)||0) : 5;
+  const thr        = thrStr !== '' ? Math.max(0, parseInt(thrStr)||0) : 0;
   const volume     = parseFloat(document.getElementById('a-vol')?.value) || 0;
   const volUnit    = document.getElementById('a-vol-unit')?.value?.trim() || '';
   const alertMode  = document.getElementById('a-alert-mode')?.value || 'threshold';
