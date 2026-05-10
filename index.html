@@ -2060,7 +2060,7 @@ function renderAdd() {
         <div id="days-group" style="${alertMode==='days'?'':'display:none'}">
           <div class="form-group">
             <label class="form-label">消費日数（1個あたり・手動設定）</label>
-            <input class="form-input" id="a-days" type="number" placeholder="7" value="${esc(p?.manual_days_per_unit||'')}" inputmode="decimal" step="0.1">
+            <input class="form-input" id="a-days" type="number" placeholder="30" value="${p ? esc(p.manual_days_per_unit||'') : '30'}" inputmode="decimal" step="0.1">
             <p class="form-hint">${estimatedDaysHint(p)}</p>
           </div>
         </div>
