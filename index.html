@@ -1855,20 +1855,7 @@ function bindAction() {
             : `📅 次回目安: ${nextStr}（あと${cycle.daysUntilDue}日）`}
         </div>
         ${showDev ? `<div style="color:var(--warn);margin-top:4px;font-size:12px;">実績と手動設定が${cycle.deviationPct > 0 ? '+' : ''}${cycle.deviationPct}%ずれています</div>` : ''}
-        ${cycle.suggestedDaysPerUnit ? `<button class="btn btn-secondary" id="apply-cycle" style="margin-top:8px;font-size:12px;padding:7px 12px;">📊 計算値（${cycle.suggestedDaysPerUnit}日/個）を消費日数に設定</button>` : ''}
       </div>`;
-    document.getElementById('apply-cycle')?.addEventListener('click', async () => {
-      if (!cycle.suggestedDaysPerUnit) return;
-      const r = await apiPost({action:'upsertProduct', group_id:p.group_id, name:p.name, unit:p.unit,
-        volume:p.volume||0, volume_unit:p.volume_unit||'', track_stock:p.track_stock?1:0,
-        manual_days_per_unit:cycle.suggestedDaysPerUnit});
-      if (r.ok) {
-        toast(`消費日数を${cycle.suggestedDaysPerUnit}日/個に設定しました`);
-        const prod = (S.cache?.products||[]).find(x => String(x.group_id)===String(p.group_id));
-        if (prod) prod.manual_days_per_unit = cycle.suggestedDaysPerUnit;
-        saveLocalCache(); bgRefresh();
-      } else toast(r.error||'エラー','err');
-    });
   }
 }
 
@@ -1919,7 +1906,11 @@ async function doStockAction(p) {
     const inv = S.cache.inventory.find(r=>r.group_id===p.group_id);
     if (inv) {
       const before = inv.qty;
-      if (S.actionMode==='in')  inv.qty += qty;
+      if (S.actionMode==='in') {
+        // 仮想消費量があればそれをベースに加算（小数点在庫を保持）
+        const base = (p.virtualQty !== null) ? p.virtualQty : inv.qty;
+        inv.qty = Math.round((base + qty) * 10) / 10;
+      }
       if (S.actionMode==='out') inv.qty = Math.max(0, inv.qty-qty);
       if (S.actionMode==='set') inv.qty = Math.max(0, qty);
       inv.updated_at = new Date().toLocaleString('ja-JP');
@@ -1938,8 +1929,11 @@ async function doStockAction(p) {
   }
   try {
     const lotVolRecord = (S.actionMode === 'in' && Math.abs(convFactor - 1) > 0.001) ? lotVol : null;
+    // 仮想消費量がある場合、GASに pre_virtual_qty を渡してベース加算してもらう（履歴はinのまま）
+    const preVirtualQty = (S.actionMode === 'in' && p.virtualQty !== null) ? p.virtualQty : undefined;
     const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name,
-      barcode:S.scannedBarcode||'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, store_name:storeName, price, memo, user:S.user});
+      barcode:S.scannedBarcode||'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord,
+      pre_virtual_qty:preVirtualQty, store_name:storeName, price, memo, user:S.user});
     if (res.ok) {
       // ローカルキャッシュを即時更新（GAS再取得を待たない）
       const inv = (S.cache?.inventory||[]).find(r => String(r.group_id)===String(p.group_id));
@@ -2001,7 +1995,7 @@ function estimatedDaysHint(p) {
 }
 function renderAdd() {
   const p          = S.editProduct;
-  const alertMode  = p?.alert_mode  || 'threshold';
+  const alertMode  = p?.alert_mode  || 'days';
   const trackStock = p ? p.track_stock : true;
   const modeLabels = {threshold:'しきい値',days:'消費日数',none:'管理しない'};
   return `
@@ -2062,6 +2056,13 @@ function renderAdd() {
             <label class="form-label">消費日数（1個あたり・手動設定）</label>
             <input class="form-input" id="a-days" type="number" placeholder="30" value="${p ? esc(p.manual_days_per_unit||'') : '30'}" inputmode="decimal" step="0.1">
             <p class="form-hint">${estimatedDaysHint(p)}</p>
+            ${(() => {
+              if (!p) return '';
+              const cycle = calcPurchaseCycle(p);
+              return cycle?.suggestedDaysPerUnit
+                ? `<button type="button" class="btn btn-secondary" id="fill-cycle" style="margin-top:8px;font-size:12px;padding:7px 12px;">📊 入庫実績から入力（${cycle.suggestedDaysPerUnit}日/個）</button>`
+                : '';
+            })()}
           </div>
         </div>
       </div>
@@ -2093,6 +2094,13 @@ function renderAdd() {
 }
 function bindAdd() {
   document.getElementById('back-btn')?.addEventListener('click', () => go(S.editProduct?'action':'home'));
+  document.getElementById('fill-cycle')?.addEventListener('click', () => {
+    const cycle = calcPurchaseCycle(S.editProduct);
+    if (cycle?.suggestedDaysPerUnit) {
+      document.getElementById('a-days').value = cycle.suggestedDaysPerUnit;
+      toast(`消費日数を${cycle.suggestedDaysPerUnit}日/個に入力しました`);
+    }
+  });
 
   // Unit pills
   document.querySelectorAll('.up').forEach(pill=>pill.addEventListener('click', () => {
