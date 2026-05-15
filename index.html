@@ -375,6 +375,7 @@ const S = {
   query:  '',
   filterMode: '', // '' = 全件 / 'soon' = 20日以内
   histFilter: 'all',
+  histSearch: '',
   // Stock action
   activeProduct: null,
   actionMode:    'in',
@@ -538,26 +539,26 @@ function makeDemoData() {
     ],
     history: [
       // 牛乳 1L — 複数店舗・定期購入
-      { timestamp: '2026/04/26 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 9,  store_name: 'コープ',  price: 188, user: 'しんしん' },
-      { timestamp: '2026/04/22 18:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: 3,  store_name: '',        price: '',  user: 'ケイコ' },
-      { timestamp: '2026/04/15 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 5,  store_name: 'ロピア',  price: 178, user: 'しんしん' },
-      { timestamp: '2026/04/10 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 3, after_qty: -1, store_name: '',        price: '',  user: 'ケイコ' },
-      { timestamp: '2026/04/04 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 2,  store_name: 'コープ',  price: 192, user: 'しんしん' },
-      { timestamp: '2026/03/28 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: -4, store_name: '',        price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/26 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 9,  store_name: 'コープ',  price: 188, memo: 'クーポン使用', user: 'しんしん' },
+      { timestamp: '2026/04/22 18:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: 3,  store_name: '',        price: '',  memo: '',            user: 'ケイコ' },
+      { timestamp: '2026/04/15 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 5,  store_name: 'ロピア',  price: 178, memo: 'セール',       user: 'しんしん' },
+      { timestamp: '2026/04/10 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 3, after_qty: -1, store_name: '',        price: '',  memo: '',            user: 'ケイコ' },
+      { timestamp: '2026/04/04 09:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '4901234567890', action: 'in',  qty: 6, after_qty: 2,  store_name: 'コープ',  price: 192, memo: '',            user: 'しんしん' },
+      { timestamp: '2026/03/28 08:00', group_id: 'p1', product_name: '牛乳 1L', barcode: '',              action: 'out', qty: 2, after_qty: -4, store_name: '',        price: '',  memo: '',            user: 'ケイコ' },
       // トイレットペーパー — 複数店舗比較
-      { timestamp: '2026/04/25 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 12, store_name: '',         price: '',  user: 'ケイコ' },
-      { timestamp: '2026/04/10 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 13, store_name: '',         price: '',  user: 'ケイコ' },
-      { timestamp: '2026/04/01 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 14, store_name: 'トライアル', price: 498, user: 'しんしん' },
-      { timestamp: '2026/03/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 12, store_name: 'ドラモリ',   price: 468, user: 'しんしん' },
-      { timestamp: '2026/02/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 0,  store_name: '',         price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/25 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 12, store_name: '',         price: '',  memo: '',            user: 'ケイコ' },
+      { timestamp: '2026/04/10 20:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 13, store_name: '',         price: '',  memo: '',            user: 'ケイコ' },
+      { timestamp: '2026/04/01 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 14, store_name: 'トライアル', price: 498, memo: 'まとめ買い', user: 'しんしん' },
+      { timestamp: '2026/03/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'in',  qty: 12, after_qty: 12, store_name: 'ドラモリ',   price: 468, memo: '',           user: 'しんしん' },
+      { timestamp: '2026/02/15 11:00', group_id: 'p2', product_name: 'トイレットペーパー', barcode: '', action: 'out', qty: 1, after_qty: 0,  store_name: '',         price: '',  memo: '',            user: 'ケイコ' },
       // 洗剤（詰め替え） — Amazon vs ドラッグストア比較
-      { timestamp: '2026/04/24 15:30', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'ドラッグストア', price: 298, user: 'しんしん' },
-      { timestamp: '2026/03/20 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'Amazon',         price: 276, user: 'しんしん' },
-      { timestamp: '2026/02/18 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '',              action: 'out', qty: 2, after_qty: 0, store_name: '',               price: '',  user: 'ケイコ' },
+      { timestamp: '2026/04/24 15:30', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'ドラッグストア', price: 298, memo: '',          user: 'しんしん' },
+      { timestamp: '2026/03/20 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '4909999000001', action: 'in', qty: 2, after_qty: 2, store_name: 'Amazon',         price: 276, memo: 'Primeセール', user: 'しんしん' },
+      { timestamp: '2026/02/18 14:00', group_id: 'p3', product_name: '洗剤（詰め替え）', barcode: '',              action: 'out', qty: 2, after_qty: 0, store_name: '',               price: '',  memo: '使い切り',    user: 'ケイコ' },
       // ゴミ袋
-      { timestamp: '2026/04/20 12:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'set', qty: 30, after_qty: 30, store_name: '', price: '', user: 'しんしん' },
-      { timestamp: '2026/04/19 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 28, store_name: '', price: '', user: 'ケイコ' },
-      { timestamp: '2026/04/12 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 30, store_name: '', price: '', user: 'ケイコ' },
+      { timestamp: '2026/04/20 12:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'set', qty: 30, after_qty: 30, store_name: '', price: '', memo: '新品開封', user: 'しんしん' },
+      { timestamp: '2026/04/19 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 28, store_name: '', price: '', memo: '',         user: 'ケイコ' },
+      { timestamp: '2026/04/12 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 30, store_name: '', price: '', memo: '',         user: 'ケイコ' },
     ],
   };
 }
@@ -1738,9 +1739,14 @@ function renderAction() {
 }
 function renderExtras() {
   if (S.actionMode !== 'in') return `
-    <div style="text-align:center;padding:4px 0 8px;">
-      <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">店舗・価格・メモの入力は入庫時のみ</p>
-      <button class="btn btn-secondary" id="act-price-only" style="font-size:13px;padding:10px 18px;">💰 価格だけ記録（在庫変更なし）</button>
+    <div style="padding:0 0 8px;">
+      <div class="form-group" style="margin-bottom:8px;">
+        <label class="form-label">メモ（任意）</label>
+        <input class="form-input" id="memo-in" type="text" placeholder="${S.actionMode==='out'?'廃棄・使い切りなど':'在庫数の補足など'}">
+      </div>
+      <div style="text-align:center;">
+        <button class="btn btn-secondary" id="act-price-only" style="font-size:13px;padding:10px 18px;">💰 価格だけ記録（在庫変更なし）</button>
+      </div>
     </div>`;
   const stores     = getUniqueStores();
   const p          = S.activeProduct;
@@ -2272,6 +2278,10 @@ function renderHistory() {
     <div class="pills">
       ${opts.map(o=>`<button class="pill ${S.histFilter===o.id?'active':''} hf" data-f="${o.id}">${o.l}</button>`).join('')}
     </div>
+    <div style="padding:8px 16px 4px;position:relative;">
+      <input id="hist-search" class="form-input" type="text" placeholder="🔍 商品名・店舗・メモで検索…" value="${esc(S.histSearch)}" style="padding-right:40px;">
+      <button id="hist-search-clear" style="position:absolute;right:24px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:4px;display:${S.histSearch?'':'none'};">✕</button>
+    </div>
     <div id="hist-list"><div class="loading"><div class="spinner"></div>読み込み中…</div></div>
   `;
 }
@@ -2281,6 +2291,19 @@ async function bindHistory() {
     document.querySelectorAll('.hf').forEach(x=>x.classList.toggle('active',x.dataset.f===S.histFilter));
     paintHistory();
   }));
+  // 検索ボックス
+  let searchTimer;
+  document.getElementById('hist-search')?.addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { S.histSearch = e.target.value; paintHistory(); }, 200);
+  });
+  document.getElementById('hist-search-clear')?.addEventListener('click', () => {
+    S.histSearch = '';
+    const searchEl = document.getElementById('hist-search');
+    if (searchEl) searchEl.value = '';
+    document.getElementById('hist-search-clear').style.display = 'none';
+    paintHistory();
+  });
   // キャッシュがあれば即表示、バックグラウンドで最新を取得
   if (S.cache) { paintHistory(); }
   getAllData().then(d => { if (d?.ok) { S.cache = d; paintHistory(); } });
@@ -2292,7 +2315,25 @@ function paintHistory() {
   if (S.histFilter === 'analytics') { paintHistoryAnalytics(el, data); return; }
   let hist = data.history||[];
   if (S.histFilter!=='all') hist=hist.filter(h=>h.action===S.histFilter);
-  if (!hist.length) { el.innerHTML='<div class="empty"><div class="ei">📋</div><p>履歴がありません</p></div>'; return; }
+  // キーワード検索
+  const q = S.histSearch.trim().toLowerCase();
+  if (q) {
+    hist = hist.filter(h =>
+      (h.product_name||'').toLowerCase().includes(q) ||
+      (h.store_name||'').toLowerCase().includes(q) ||
+      (h.memo||'').toLowerCase().includes(q) ||
+      (h.user||'').toLowerCase().includes(q)
+    );
+  }
+  // 検索クリアボタンの表示同期
+  const clearBtn = document.getElementById('hist-search-clear');
+  if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
+  if (!hist.length) {
+    el.innerHTML = q
+      ? `<div class="empty"><div class="ei">🔍</div><p>「${esc(S.histSearch)}」に一致する履歴がありません</p></div>`
+      : '<div class="empty"><div class="ei">📋</div><p>履歴がありません</p></div>';
+    return;
+  }
   const icon={in:'📥',out:'📤',set:'🔧'};
   const sign={in:'+',out:'−',set:'='};
   el.innerHTML = hist.map(h=>`
@@ -2300,7 +2341,9 @@ function paintHistory() {
       <div class="hist-icon ${h.action}">${icon[h.action]||'•'}</div>
       <div class="hist-body">
         <div class="hist-name">${esc(h.product_name||h.group_id)}</div>
-        <div class="hist-meta">${esc(h.user)} · ${relDate(h.timestamp)}${h.store_name?` · 🏪 ${esc(h.store_name)}`:''}${h.price?` · ¥${Number(h.price).toLocaleString()}`:''}
+        <div class="hist-meta">
+          ${esc(h.user)} · ${relDate(h.timestamp)}${h.store_name?` · 🏪 ${esc(h.store_name)}`:''}${h.price?` · ¥${Number(h.price).toLocaleString()}`:''}
+          ${h.memo?`<br><span style="color:var(--text);opacity:0.75;">📝 ${esc(h.memo)}</span>`:''}
         </div>
       </div>
       <div class="hist-right">
