@@ -6,7 +6,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#1a1d27">
 <title>STOCKR</title>
-<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
 /* ==================== VARIABLES ==================== */
 :root {
@@ -351,10 +350,6 @@ input { font-family: inherit; }
 }
 .unit-pill.active { background: rgba(0,229,160,0.12); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
-/* ==================== SCANNER ==================== */
-#qr-reader { border-radius: var(--radius); overflow: hidden; }
-#qr-reader video { width: 100% !important; border-radius: 0; }
-#qr-reader img { display: none !important; }
 </style>
 </head>
 <body>
@@ -368,8 +363,6 @@ input { font-family: inherit; }
 const S = {
   url:        localStorage.getItem('stockr_url')         || '',
   user:       localStorage.getItem('stockr_user')        || '',
-  yahooKey:   localStorage.getItem('stockr_yahoo_key')   || '',
-  rakutenKey: localStorage.getItem('stockr_rakuten_key') || '',
   sort:       localStorage.getItem('stockr_sort')        || 'name',
   screen: 'home',
   query:  '',
@@ -380,9 +373,6 @@ const S = {
   activeProduct: null,
   actionMode:    'in',
   actionInput:   '',
-  scannedBarcode: '',
-  scannedStore:   '',
-  scannedPrice:   '',
   // Add/edit
   editProduct: null,
   preBarcode:  '',
@@ -395,8 +385,9 @@ const S = {
   cache:     null,
   cacheTime: 0,
   CACHE_TTL: 300000, // 5分キャッシュ
-  // Scanner
-  scanner: null,
+  // Shopping mode
+  viewMode: 'home',   // 'home' | 'shop'
+  shopFlags: new Set(JSON.parse(localStorage.getItem('stockr_shop_flags') || '[]')),
 };
 
 // ============================================================
@@ -419,22 +410,10 @@ async function apiPost(body) {
   return res.json();
 }
 // ============================================================
-// JAN BARCODE CACHE (localStorage + GAS cache_api sheet)
+// SHOP FLAGS
 // ============================================================
-const JAN_LS_PFX = 'stockr_jan_';
-const JAN_LS_TTL = 30 * 24 * 60 * 60 * 1000; // 30日
-
-function getJanLS(bc) {
-  try {
-    const raw = localStorage.getItem(JAN_LS_PFX + bc);
-    if (!raw) return null;
-    const { d, t } = JSON.parse(raw);
-    if (Date.now() - t > JAN_LS_TTL) { localStorage.removeItem(JAN_LS_PFX + bc); return null; }
-    return d;
-  } catch(e) { return null; }
-}
-function setJanLS(bc, data) {
-  try { localStorage.setItem(JAN_LS_PFX + bc, JSON.stringify({ d: data, t: Date.now() })); } catch(e) {}
+function saveShopFlags() {
+  try { localStorage.setItem('stockr_shop_flags', JSON.stringify([...S.shopFlags])); } catch(e) {}
 }
 
 // ─── ローカルキャッシュ即時保存 ──────────────────────────────────
@@ -596,15 +575,10 @@ function relDate(s) {
   if (diff < 604800000)return `${Math.floor(diff/86400000)}日前`;
   return `${d.getMonth()+1}/${d.getDate()}`;
 }
-function stopScanner() {
-  if (S.scanner) { S.scanner.clear().catch(()=>{}); S.scanner = null; }
-}
-
 // ============================================================
 // ROUTER
 // ============================================================
 function go(screen, params = {}) {
-  stopScanner();
   S.saving = false; // 画面移動時に必ずリセット
   Object.assign(S, params);
   S.screen = screen;
@@ -620,7 +594,6 @@ function render() {
 
   const body = {
     home:     renderHome,
-    scan:     renderScan,
     action:   renderAction,
     add:      renderAdd,
     history:  renderHistory,
@@ -639,7 +612,6 @@ function render() {
 
   ({
     home:    bindHome,
-    scan:    bindScan,
     action:  bindAction,
     add:     bindAdd,
     history: bindHistory,
@@ -651,10 +623,10 @@ function render() {
 // TOPBAR
 // ============================================================
 function renderTopbar() {
-  const titles = { home:'', scan:'スキャン', action:'', add: S.editProduct?'商品を編集':'商品を追加', history:'操作履歴', settings:'設定' };
+  const titles = { home:'', action:'', add: S.editProduct?'商品を編集':'商品を追加', history:'操作履歴', settings:'設定' };
   const back = ['action','add'].includes(S.screen)
     ? `<button class="back-btn" id="back-btn">‹</button>` : '';
-  const main = S.screen === 'home' || S.screen === 'scan' || S.screen === 'history' || S.screen === 'settings'
+  const main = S.screen === 'home' || S.screen === 'history' || S.screen === 'settings'
     ? `<span class="topbar-logo">STOCKR</span>` : '';
   const title = !['home'].includes(S.screen) ? `<span class="topbar-title">${titles[S.screen]||''}</span>` : '';
 
@@ -683,7 +655,6 @@ function renderTopbar() {
 function renderNav() {
   const tabs = [
     {id:'home',    icon:'📦', label:'在庫'},
-    {id:'scan',    icon:'📷', label:'スキャン'},
     {id:'history', icon:'📋', label:'履歴'},
     {id:'settings',icon:'⚙️', label:'設定'},
   ];
@@ -741,12 +712,16 @@ function bindSetup() {
 // ============================================================
 function renderHome() {
   return `
-    <div class="search-wrap">
+    <div style="display:flex;gap:8px;padding:12px 16px 0;">
+      <button id="vm-home" class="btn ${S.viewMode==='home'?'btn-primary':'btn-secondary'}" style="flex:1;padding:10px;">📦 在庫</button>
+      <button id="vm-shop" class="btn ${S.viewMode==='shop'?'btn-primary':'btn-secondary'}" style="flex:1;padding:10px;">🛒 買い物</button>
+    </div>
+    ${S.viewMode==='home' ? `<div class="search-wrap">
       <input class="search-input" id="q" type="search" placeholder="🔍 検索（スペースで複数キーワード）" value="${esc(S.query)}">
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
-      <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🛒</button>
+      <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🗺</button>
       <button class="sort-btn" id="soon-btn" title="20日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
-    </div>
+    </div>` : ''}
     <div id="home-list">${S.cache ? '' : paintHomeListSkeleton()}</div>
     <button class="fab-sub" id="fab-bulk" title="まとめて登録">📋</button>
     <button class="fab" id="fab-add">＋</button>
@@ -759,10 +734,20 @@ async function bindHome() {
   document.getElementById('back-btn')?.addEventListener('click', () => go('home'));
   document.getElementById('fab-add').addEventListener('click', () => go('add', {editProduct:null, preBarcode:''}));
   document.getElementById('fab-bulk').addEventListener('click', showBulkAdd);
-  document.getElementById('q').addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
-  document.getElementById('sort-btn').addEventListener('click', showSortModal);
-  document.getElementById('shop-list-btn').addEventListener('click', showShoppingList);
-  document.getElementById('soon-btn').addEventListener('click', () => {
+  document.getElementById('vm-home')?.addEventListener('click', () => {
+    S.viewMode = 'home'; paintHomeList();
+    document.getElementById('vm-home').className = 'btn btn-primary'; document.getElementById('vm-home').style.flex='1'; document.getElementById('vm-home').style.padding='10px';
+    document.getElementById('vm-shop').className = 'btn btn-secondary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
+  });
+  document.getElementById('vm-shop')?.addEventListener('click', () => {
+    S.viewMode = 'shop'; paintHomeList();
+    document.getElementById('vm-shop').className = 'btn btn-primary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
+    document.getElementById('vm-home').className = 'btn btn-secondary'; document.getElementById('vm-home').style.flex='1'; document.getElementById('vm-home').style.padding='10px';
+  });
+  document.getElementById('q')?.addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
+  document.getElementById('sort-btn')?.addEventListener('click', showSortModal);
+  document.getElementById('shop-list-btn')?.addEventListener('click', showShoppingList);
+  document.getElementById('soon-btn')?.addEventListener('click', () => {
     S.filterMode = S.filterMode === 'soon' ? '' : 'soon';
     const btn = document.getElementById('soon-btn');
     if (btn) btn.style.cssText = `font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}`;
@@ -934,164 +919,6 @@ function getUsedVolumeUnits() {
   const used = new Set(base);
   (S.cache?.products || []).forEach(p => { if (p.volume_unit) used.add(p.volume_unit); });
   return [...used];
-}
-
-// ============================================================
-// EXTERNAL PRODUCT INFO (JAN → 商品名・価格)
-// ============================================================
-// 外部ECサイトから商品名・価格を取得
-// APIキーなしでも Open Food Facts (食品) は動作
-// Yahoo!/楽天は設定画面でAPIキーを登録すると有効になる
-async function fetchExternalProductInfo(bc) {
-  // ── 1. localStorageキャッシュ（即時・ネットワーク不要） ──────────
-  const lsHit = getJanLS(bc);
-  if (lsHit) return lsHit;
-
-  // ── 2. GAS cache_api シート（他端末でも共有） ────────────────────
-  if (S.url && S.url !== 'DEMO') {
-    try {
-      const gasHit = await apiGet('getApiCache', { jan: bc });
-      if (gasHit?.data) {
-        const d = gasHit.data;
-        const cached = {
-          name:   d.product_name || '',
-          prices: [],
-          source: (d.source || '').split(',').filter(Boolean),
-          image:  d.image_url || '',
-        };
-        if (d.yahoo_price)   cached.prices.push({ storeName: 'Yahoo!ショッピング', price: Number(d.yahoo_price) });
-        if (d.rakuten_price) cached.prices.push({ storeName: '楽天市場',           price: Number(d.rakuten_price) });
-        cached.prices.sort((a,b) => a.price - b.price);
-        setJanLS(bc, cached); // ローカルにも保存して次回即時返却
-        return cached;
-      }
-    } catch(e) {}
-  }
-
-  // ── 3. 外部APIを並列で叩く ───────────────────────────────────────
-  const result = { name: '', prices: [], source: [] };
-
-  const [off, yahoo, rakuten] = await Promise.allSettled([
-    // 3-a. Open Food Facts（キー不要・食品向け）
-    (async () => {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 4000);
-      const res  = await fetch(`https://world.openfoodfacts.org/api/v0/product/${bc}.json?fields=product_name,product_name_ja,brands`, { signal: ctrl.signal });
-      return res.json();
-    })(),
-    // 3-b. Yahoo!ショッピングAPI
-    (async () => {
-      const key = localStorage.getItem('stockr_yahoo_key');
-      if (!key) return null;
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(`https://shopping.yahooapis.jp/ShoppingWebService/V3/itemSearch?appid=${encodeURIComponent(key)}&jan_code=${encodeURIComponent(bc)}&results=10&sort=-score`, { signal: ctrl.signal });
-      return res.json();
-    })(),
-    // 3-c. 楽天市場API
-    (async () => {
-      const key = (localStorage.getItem('stockr_rakuten_key') || '').trim();
-      if (!key) return null;
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 6000);
-      const res = await fetch(`https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601?applicationId=${encodeURIComponent(key)}&keyword=${encodeURIComponent(bc)}&hits=10&sort=%2BitemPrice&format=json`, { signal: ctrl.signal });
-      return res.json();
-    })(),
-  ]);
-
-  // Open Food Facts
-  if (off.status === 'fulfilled' && off.value?.status === 1 && off.value.product) {
-    const p = off.value.product;
-    const n = p.product_name_ja || p.product_name || p.brands || '';
-    if (n) { result.name = n; result.source.push('Open Food Facts'); }
-  }
-
-  // Yahoo!ショッピング
-  if (yahoo.status === 'fulfilled' && yahoo.value?.hits?.length > 0) {
-    const hits = yahoo.value.hits;
-    if (!result.name) result.name = hits[0].name || '';
-    hits.forEach(h => { if (h.price) result.prices.push({ storeName: h.seller?.name || 'Yahoo!ショッピング', price: Number(h.price) }); });
-    result.source.push('Yahoo!ショッピング');
-  }
-
-  // 楽天市場
-  if (rakuten.status === 'fulfilled' && rakuten.value) {
-    const d = rakuten.value;
-    if (d.error) {
-      console.warn('[Rakuten API]', d.error, d.error_description);
-      result.rakutenError = d.error_description || d.error;
-    } else if (d.Items?.length > 0) {
-      if (!result.name) {
-        const raw = d.Items[0].Item?.itemName || '';
-        result.name = raw.replace(/【[^】]*】/g,'').replace(/\[[^\]]*\]/g,'').trim();
-      }
-      d.Items.forEach(item => {
-        const it = item.Item;
-        if (it?.itemPrice) result.prices.push({ storeName: it.shopName || '楽天市場', price: Number(it.itemPrice) });
-      });
-      result.source.push('楽天市場');
-    }
-  }
-
-  result.prices.sort((a, b) => a.price - b.price);
-
-  // ── 4. キャッシュに保存（次回以降の高速化） ──────────────────────
-  setJanLS(bc, result);
-  if (S.url && S.url !== 'DEMO' && result.name) {
-    apiPost({
-      action:        'setApiCache',
-      jan_code:       bc,
-      product_name:   result.name,
-      yahoo_price:    result.prices.find(p => p.storeName?.includes('Yahoo'))?.price  || '',
-      rakuten_price:  result.prices.find(p => p.storeName?.includes('楽天'))?.price   || '',
-      source:         result.source.join(','),
-    }).catch(() => {});
-  }
-
-  return result;
-}
-
-// 外部最安値をモーダルで表示
-async function showExternalPrices(p, bc) {
-  const yahooKey   = localStorage.getItem('stockr_yahoo_key');
-  const rakutenKey = localStorage.getItem('stockr_rakuten_key');
-  const hasApi     = yahooKey || rakutenKey;
-  const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(p.name + ' Amazon')}`;
-
-  const ov = document.createElement('div'); ov.className = 'overlay';
-  ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
-    <h2>🌐 ECサイト価格確認</h2>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">${esc(p.name)}　JAN: <code style="color:var(--accent);">${esc(bc)}</code></p>
-    <div id="ext-price-result">${hasApi ? '<div class="loading" style="padding:24px 0;"><div class="spinner"></div>検索中…</div>' : ''}</div>
-    <a href="${googleSearchUrl}" target="_blank" rel="noopener" class="btn btn-secondary" style="display:block;text-align:center;margin-top:12px;text-decoration:none;">🔍 Googleで「${esc(p.name)} Amazon」を検索</a>
-    <button class="btn btn-ghost" id="ep-close" style="margin-top:8px;">閉じる</button>
-  </div>`;
-  document.body.appendChild(ov);
-  document.getElementById('ep-close').addEventListener('click', () => ov.remove());
-
-  if (!hasApi) return;
-
-  const info = await fetchExternalProductInfo(bc);
-  const el   = document.getElementById('ext-price-result');
-  if (!el) return;
-
-  if (!info.prices.length) {
-    el.innerHTML = `<div style="font-size:13px;color:var(--muted);padding:8px 0;">価格情報が見つかりませんでした</div>`;
-    return;
-  }
-  const best = info.prices[0];
-  el.innerHTML = `
-    <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">🥇 Yahoo! 最安値</div>
-      <div style="font-size:26px;font-weight:900;color:var(--accent);">¥${best.price.toLocaleString()}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:2px;">${esc(best.storeName)}</div>
-    </div>
-    ${info.prices.slice(1, 8).map(item => `
-      <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px;">
-        <span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:65%;">${esc(item.storeName)}</span>
-        <span style="font-weight:700;">¥${item.price.toLocaleString()}</span>
-      </div>`).join('')}
-    <div style="font-size:10px;color:var(--muted);margin-top:8px;text-align:right;">取得元: ${info.source.join('・')}</div>`;
 }
 
 // 消費統計を計算（出庫ベース + 入庫サイクルベース）
@@ -1333,6 +1160,74 @@ function paintHomeList() {
   if (!data.ok) { el.innerHTML = `<div class="empty"><div class="ei">⚠️</div><p>${esc(data.error||'取得エラー')}</p></div>`; return; }
 
   let prods = buildProducts(data);
+
+  // ── 買い物モード ──────────────────────────────────────────────
+  if (S.viewMode === 'shop') {
+    prods = prods.filter(p => {
+      if (S.shopFlags.has(String(p.group_id))) return true;
+      if (!p.track_stock) return false; // 価格のみ: 手動フラグのみ
+      if (p.isLow) return true;
+      const dr = calcDaysRemaining(p);
+      if (dr !== null && dr <= 20) return true;
+      return false;
+    });
+    // 緊急度でソート: 手動フラグ・価格のみを末尾、残日数昇順
+    prods.sort((a, b) => {
+      const aManual = S.shopFlags.has(String(a.group_id)) && !a.track_stock;
+      const bManual = S.shopFlags.has(String(b.group_id)) && !b.track_stock;
+      if (aManual !== bManual) return aManual ? 1 : -1;
+      const aDr = a.track_stock ? (calcDaysRemaining(a) ?? 9999) : 9999;
+      const bDr = b.track_stock ? (calcDaysRemaining(b) ?? 9999) : 9999;
+      return aDr - bDr;
+    });
+
+    let html = `<div style="padding:8px 16px;font-size:12px;color:var(--muted);">${prods.length}件</div>`;
+    if (!prods.length) {
+      html = `<div class="empty"><div class="ei">🛒</div><p>買い物リストは空です<br><span style="font-size:12px;">在庫が少ない商品が自動で追加されます</span></p></div>`;
+    } else {
+      html += prods.map(p => {
+        const dr = p.track_stock ? calcDaysRemaining(p) : null;
+        return `
+        <div class="product-item" data-gid="${p.group_id}" style="display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:700;font-size:15px;">${esc(p.name)}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px;">
+              ${p.track_stock ? `在庫: ${p.displayQty}${esc(p.unit)}` : '価格のみ'}
+              ${p.latestPrice ? ` · 前回¥${p.latestPrice.toLocaleString()}${p.latestStore ? ` (${esc(p.latestStore)})` : ''}` : ''}
+              ${(() => { return dr !== null ? ` · 残${dr}日` : ''; })()}
+            </div>
+          </div>
+          ${S.shopFlags.has(String(p.group_id)) ? `<button class="shop-remove" data-gid="${p.group_id}" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;color:var(--muted);cursor:pointer;">✕ リストから外す</button>` : ''}
+          <button class="shop-buy btn btn-primary" data-gid="${p.group_id}" style="padding:10px 16px;font-size:13px;white-space:nowrap;">${p.track_stock ? '📥 入庫' : '✓ 済'}</button>
+        </div>`;
+      }).join('');
+    }
+    el.innerHTML = html;
+
+    el.addEventListener('click', e => {
+      // 買い物モード: 入庫ボタン
+      if (e.target.closest('.shop-buy')) {
+        const gid = e.target.closest('.shop-buy').dataset.gid;
+        const prod = prods.find(x => String(x.group_id) === gid);
+        if (!prod) return;
+        if (prod.track_stock) {
+          go('action', {activeProduct:prod, actionMode:'in', actionInput:''});
+        } else {
+          S.shopFlags.delete(gid); saveShopFlags(); paintHomeList();
+        }
+        return;
+      }
+      // 買い物モード: リストから外す
+      if (e.target.closest('.shop-remove')) {
+        const gid = e.target.closest('.shop-remove').dataset.gid;
+        S.shopFlags.delete(gid); saveShopFlags(); paintHomeList();
+        return;
+      }
+    });
+    return;
+  }
+
+  // ── 在庫モード ────────────────────────────────────────────────
   if (S.query) {
     const terms = S.query.toLowerCase().split(/\s+/).filter(Boolean);
     prods = prods.filter(p => {
@@ -1418,6 +1313,7 @@ function paintHomeList() {
         </div>
         <div class="pi-btns">
           ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
+          <button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加" style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px;opacity:${S.shopFlags.has(String(p.group_id))?'1':'0.3'};">🛒</button>
         </div>
       </div>`;
     }).join('');
@@ -1433,15 +1329,24 @@ function paintHomeList() {
       if (btn) btn.style.cssText = 'font-size:16px;padding:9px 10px;';
       paintHomeList(); return;
     }
+    // 在庫モード: 買い物フラグ切り替え
+    if (e.target.closest('.shop-flag')) {
+      const gid = e.target.closest('.shop-flag').dataset.gid;
+      if (S.shopFlags.has(gid)) { S.shopFlags.delete(gid); } else { S.shopFlags.add(gid); }
+      saveShopFlags();
+      const btn = e.target.closest('.shop-flag');
+      btn.style.opacity = S.shopFlags.has(gid) ? '1' : '0.3';
+      return;
+    }
     const row = e.target.closest('.product-item');
     if (!row) return;
     const p = prods.find(x => String(x.group_id) === row.dataset.gid);
     if (!p) return;
     if (e.target.closest('.qp')) { quickStock(p, 'in',  1); return; }
     if (e.target.closest('.qm')) { quickStock(p, 'out', 1); return; }
-    go('action', {activeProduct:p, actionMode:'out', actionInput:'', scannedBarcode:'', scannedStore:'', scannedPrice:''});
+    go('action', {activeProduct:p, actionMode:'out', actionInput:''});
   });
-  document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; document.getElementById('q').value=''; paintHomeList(); });
+  document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); document.getElementById('sort-btn')?.textContent && (document.getElementById('sort-btn').textContent=sortLabel()); S.query=''; document.getElementById('q')?.value !== undefined && (document.getElementById('q').value=''); paintHomeList(); });
 }
 async function quickStock(p, action, qty) {
   if (S.quickLock[p.group_id]) return; // 連続クリック防止
@@ -1500,162 +1405,6 @@ function showSortModal() {
       setTimeout(() => ov.remove(), 150); // 色変化を見せてから閉じる
     } else if (e.target===ov) { ov.remove(); }
   });
-}
-
-// ============================================================
-// SCAN SCREEN
-// ============================================================
-function renderScan() {
-  return `
-    <div style="padding:14px;">
-      <div id="qr-reader" style="width:100%;border-radius:var(--radius);overflow:hidden;"></div>
-      <div style="margin-top:12px;background:var(--surface);border-radius:var(--radius);padding:14px;">
-        <p style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:10px;">— または数字を直接入力 —</p>
-        <div style="display:flex;gap:8px;">
-          <input class="form-input" id="manual-bc" type="text" placeholder="バーコード番号" inputmode="numeric" style="flex:1;">
-          <button class="btn btn-primary" id="manual-ok" style="width:auto;padding:12px 18px;font-size:15px;">検索</button>
-        </div>
-      </div>
-      <p style="font-size:11px;color:var(--muted);text-align:center;margin-top:10px;">📱 カメラをバーコードに近づけて、横向きで読み取ると認識しやすいです</p>
-    </div>
-  `;
-}
-function bindScan() {
-  initScanner();
-  const go_bc = () => { const bc = document.getElementById('manual-bc').value.trim(); if (bc) handleBarcode(bc); };
-  document.getElementById('manual-ok').addEventListener('click', go_bc);
-  document.getElementById('manual-bc').addEventListener('keydown', e => { if (e.key==='Enter') go_bc(); });
-}
-function initScanner() {
-  const readerEl = document.getElementById('qr-reader');
-  const errMsg = (msg) => {
-    if (readerEl) readerEl.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px;line-height:1.7;">${msg}</div>`;
-  };
-  if (typeof Html5QrcodeScanner === 'undefined') {
-    errMsg('カメラライブラリを読み込めませんでした。<br>ネット接続を確認して再読み込みしてください。');
-    return;
-  }
-  if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
-    errMsg('⚠️ カメラはHTTPS接続でのみ使用できます。<br>GitHubPages等のHTTPS URLでアクセスしてください。<br><span style="color:var(--accent);">下の入力欄からJANコードを手動入力できます。</span>');
-    return;
-  }
-  try {
-    const sc = new Html5QrcodeScanner('qr-reader', {
-      fps: 15,
-      qrbox: { width: 300, height: 120 },
-      aspectRatio: 1.5,
-      formatsToSupport: [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.QR_CODE,
-      ]
-    }, false);
-    sc.render(
-      decoded => { sc.clear().catch(()=>{}); S.scanner=null; handleBarcode(decoded); },
-      err => {}  // フレームごとの失敗は無視
-    );
-    S.scanner = sc;
-  } catch(e) {
-    console.warn('scanner init error', e);
-    errMsg(`カメラの起動に失敗しました。<br><small style="color:var(--danger);">${esc(e.message)}</small><br>カメラのアクセス許可を確認してください。`);
-  }
-}
-async function handleBarcode(bc) {
-  if (!S.cache) S.cache = await getAllData();
-  const data = S.cache;
-  if (!data?.ok) { toast('データを読み込んでから再試行してください','err'); return; }
-  const match = (data.barcodes||[]).find(b => String(b.barcode)===String(bc));
-  if (match) {
-    const prods = buildProducts(data);
-    const p = prods.find(x=>x.group_id===match.group_id);
-    if (p) go('action', {activeProduct:p, actionMode:'in', actionInput:'', scannedBarcode:bc, scannedStore:match.store_name||'', scannedPrice:match.price||''});
-    else toast('商品データが見つかりません','err');
-  } else {
-    showUnknownBarcode(bc);
-  }
-}
-
-// 後方互換（旧 fetchProductName → 新関数へ委譲）
-async function fetchProductName(bc) {
-  const info = await fetchExternalProductInfo(bc);
-  return info.name;
-}
-
-async function showUnknownBarcode(bc) {
-  const prods = buildProducts(S.cache||{});
-  const ov = document.createElement('div'); ov.className='overlay';
-
-  ov.innerHTML=`<div class="modal"><div class="modal-handle"></div>
-    <h2>🔍 未登録のバーコード</h2>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:12px;">バーコード: <code style="color:var(--accent)">${esc(bc)}</code></p>
-    <div id="jan-result" style="margin-bottom:16px;">
-      <div class="loading" style="padding:16px 0;"><div class="spinner"></div>商品名・価格を検索中…</div>
-    </div>
-    <button class="btn btn-primary" id="ob-new">＋ 新しい商品として登録</button>
-    <button class="btn btn-secondary" id="ob-link">🔗 既存の商品に紐付ける</button>
-    <button class="btn btn-secondary" id="ob-cancel">キャンセル</button>
-  </div>`;
-  document.body.appendChild(ov);
-
-  // 商品名・価格を並列取得
-  const info = await fetchExternalProductInfo(bc);
-  const janResult = document.getElementById('jan-result');
-  if (!janResult) return;
-
-  let html = '';
-  if (info.name) {
-    html += `
-      <div style="background:rgba(0,229,160,0.08);border:1.5px solid var(--accent);border-radius:10px;padding:12px 14px;margin-bottom:8px;">
-        <div style="font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px;">✅ 商品名が見つかりました</div>
-        <div style="font-size:16px;font-weight:600;">${esc(info.name)}</div>
-        ${info.source.length ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;">取得元: ${info.source.join('・')}</div>` : ''}
-      </div>`;
-  } else {
-    html += `<p style="font-size:13px;color:var(--muted);margin-bottom:8px;">商品名は見つかりませんでした。手動で入力してください。</p>`;
-  }
-  if (info.rakutenError) {
-    html += `<p style="font-size:11px;color:var(--danger);margin-bottom:8px;">⚠ 楽天APIエラー: ${esc(info.rakutenError)}</p>`;
-  }
-  if (info.prices.length) {
-    const best = info.prices[0];
-    html += `
-      <div style="background:var(--surface2);border-radius:10px;padding:10px 12px;margin-bottom:4px;">
-        <div style="font-size:11px;color:var(--muted);font-weight:700;margin-bottom:6px;">🏷 ECサイト最安値</div>
-        <div style="font-size:20px;font-weight:900;color:var(--accent);">¥${best.price.toLocaleString()}</div>
-        <div style="font-size:11px;color:var(--muted);">${esc(best.storeName)}</div>
-        ${info.prices.length > 1 ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">他${info.prices.length-1}件 最高¥${info.prices[info.prices.length-1].price.toLocaleString()}</div>` : ''}
-      </div>`;
-  }
-  janResult.innerHTML = html || `<p style="font-size:13px;color:var(--muted);">情報が見つかりませんでした。</p>`;
-
-  document.getElementById('ob-new').addEventListener('click', () => { ov.remove(); go('add',{editProduct:null, preBarcode:bc, preName:info.name}); });
-  document.getElementById('ob-link').addEventListener('click', () => { ov.remove(); showLinkBarcode(bc, prods); });
-  document.getElementById('ob-cancel').addEventListener('click', () => ov.remove());
-}
-function showLinkBarcode(bc, prods) {
-  const ov = document.createElement('div'); ov.className='overlay';
-  ov.innerHTML=`<div class="modal"><div class="modal-handle"></div>
-    <h2>🔗 商品に紐付ける</h2>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">バーコード: ${esc(bc)}</p>
-    <div style="max-height:55vh;overflow-y:auto;">
-      ${prods.map(p=>`<button class="btn btn-secondary lp" data-gid="${p.group_id}" style="text-align:left;margin-bottom:8px;">${esc(p.name)}</button>`).join('')}
-    </div>
-    <button class="btn btn-secondary" id="lp-cancel" style="margin-top:4px;">キャンセル</button>
-  </div>`;
-  document.body.appendChild(ov);
-  ov.querySelectorAll('.lp').forEach(b=>b.addEventListener('click', async () => {
-    const gid=b.dataset.gid; ov.remove();
-    if (S.url==='DEMO') { toast('バーコードを紐付けました（デモ）'); return; }
-    try {
-      const res = await apiPost({action:'upsertBarcode', barcode:bc, group_id:gid, store_name:'', price:'', memo:''});
-      if (res.ok) { toast('バーコードを紐付けました'); const d=await getAllData(true); if(d?.ok) S.cache=d; }
-      else toast(res.error||'エラー','err');
-    } catch(e) { toast('通信エラー','err'); }
-  }));
-  document.getElementById('lp-cancel').addEventListener('click', ()=>ov.remove());
 }
 
 // ============================================================
@@ -1755,12 +1504,12 @@ function renderExtras() {
   return `
     <div class="form-group">
       <label class="form-label">店舗名（任意）</label>
-      <input class="form-input" id="store-in" type="text" list="store-datalist" placeholder="コープ、スーパーなど" value="${esc(S.scannedStore)}" autocomplete="off">
+      <input class="form-input" id="store-in" type="text" list="store-datalist" placeholder="コープ、スーパーなど" value="" autocomplete="off">
       ${stores.length ? `<datalist id="store-datalist">${stores.map(s=>`<option value="${esc(s)}">`).join('')}</datalist>` : ''}
     </div>
     <div class="form-group">
       <label class="form-label">購入価格（任意）</label>
-      <input class="form-input" id="price-in" type="number" placeholder="198" inputmode="numeric" value="${esc(S.scannedPrice)}">
+      <input class="form-input" id="price-in" type="number" placeholder="198" inputmode="numeric" value="">
     </div>
     ${defaultVol > 0 ? `
     <div class="form-group">
@@ -1835,14 +1584,7 @@ function bindAction() {
   document.getElementById('act-extras').innerHTML = renderExtras();
   bindExtrasListeners();
   const ph  = renderPriceHistory(p);
-  const bcs = (S.cache?.barcodes || []).filter(b => String(b.group_id) === String(p.group_id));
-  const extBtn = bcs.length
-    ? `<button class="btn btn-secondary" id="ext-price-btn" style="margin-top:10px;font-size:13px;padding:10px 14px;">🌐 ECサイトの最安値を確認</button>`
-    : '';
-  document.getElementById('act-price-hist').innerHTML = `<div style="padding:0 2px 8px;">${ph || ''}${extBtn}</div>`;
-  if (bcs.length) {
-    document.getElementById('ext-price-btn')?.addEventListener('click', () => showExternalPrices(p, bcs[0].barcode));
-  }
+  document.getElementById('act-price-hist').innerHTML = `<div style="padding:0 2px 8px;">${ph || ''}</div>`;
 
   // 購入サイクルセクション
   const cycle = calcPurchaseCycle(p);
@@ -1921,15 +1663,16 @@ async function doStockAction(p) {
       if (S.actionMode==='set') inv.qty = Math.max(0, qty);
       inv.updated_at = new Date().toLocaleString('ja-JP');
       const lotVolRecord = (S.actionMode === 'in' && Math.abs(convFactor - 1) > 0.001) ? lotVol : null;
-      S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:S.scannedBarcode||'', action:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, after_qty:inv.qty, store_name:storeName, price, memo, user:S.user});
+      S.cache.history.unshift({timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name, barcode:'', action:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord, after_qty:inv.qty, store_name:storeName, price, memo, user:S.user});
     }
     // 入庫時に店舗・価格が入力されていればバーコードテーブルにも反映
     if (S.actionMode === 'in' && storeName && price) {
       S.cache.barcodes = S.cache.barcodes || [];
       const existBc = S.cache.barcodes.find(b => String(b.group_id) === String(p.group_id) && b.store_name === storeName);
       if (existBc) { existBc.price = price; }
-      else { S.cache.barcodes.push({barcode:S.scannedBarcode||`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')}); }
+      else { S.cache.barcodes.push({barcode:`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')}); }
     }
+    if (S.actionMode === 'in') { S.shopFlags.delete(String(p.group_id)); saveShopFlags(); }
     toast(`更新しました（デモ）${lotNote}`);
     S.actionInput=''; go('home'); return;
   }
@@ -1938,7 +1681,7 @@ async function doStockAction(p) {
     // 仮想消費量がある場合、GASに pre_virtual_qty を渡してベース加算してもらう（履歴はinのまま）
     const preVirtualQty = (S.actionMode === 'in' && p.virtualQty !== null) ? p.virtualQty : undefined;
     const res = await apiPost({action:'stockAction', group_id:p.group_id, product_name:p.name,
-      barcode:S.scannedBarcode||'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord,
+      barcode:'', move:S.actionMode, qty, phys_qty:physQty, lot_volume:lotVolRecord,
       pre_virtual_qty:preVirtualQty, store_name:storeName, price, memo, user:S.user});
     if (res.ok) {
       // ローカルキャッシュを即時更新（GAS再取得を待たない）
@@ -1946,14 +1689,15 @@ async function doStockAction(p) {
       if (inv) inv.qty = res.afterQty;
       if (S.cache) {
         S.cache.history = [{timestamp:new Date().toLocaleString('ja-JP'), group_id:p.group_id, product_name:p.name,
-          barcode:S.scannedBarcode||'', action:S.actionMode, qty, after_qty:res.afterQty,
+          barcode:'', action:S.actionMode, qty, after_qty:res.afterQty,
           store_name:storeName, price, memo, user:S.user}, ...(S.cache.history||[])].slice(0,200);
         if (S.actionMode==='in' && storeName && price) {
           const existBc = (S.cache.barcodes||[]).find(b=>String(b.group_id)===String(p.group_id)&&b.store_name===storeName);
           if (existBc) existBc.price = price;
-          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:S.scannedBarcode||`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')});
+          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:`manual_${Date.now()}`, group_id:p.group_id, store_name:storeName, price, memo:'', created_at:new Date().toLocaleString('ja-JP')});
         }
       }
+      if (S.actionMode === 'in') { S.shopFlags.delete(String(p.group_id)); saveShopFlags(); }
       saveLocalCache();
       toast(`${p.name} → ${res.afterQty}${p.unit}${lotNote}`);
       S.actionInput=''; go('home');
@@ -2080,20 +1824,6 @@ function renderAdd() {
         <label class="form-label">初期在庫数</label>
         <input class="form-input" id="a-qty" type="number" placeholder="0" value="0" inputmode="numeric">
       </div>
-      <div class="form-group">
-        <label class="form-label">バーコード（任意）</label>
-        <input class="form-input" id="a-bc" type="text" placeholder="JANコードなど" value="${esc(S.preBarcode||'')}" inputmode="numeric">
-      </div>
-      <div id="bc-extras" style="${S.preBarcode?'':'display:none'}">
-        <div class="form-group">
-          <label class="form-label">店舗名（任意）</label>
-          <input class="form-input" id="a-store" type="text" placeholder="スーパーなど">
-        </div>
-        <div class="form-group">
-          <label class="form-label">価格（任意）</label>
-          <input class="form-input" id="a-price" type="number" placeholder="198" inputmode="numeric">
-        </div>
-      </div>
       ` : ''}
       <button class="btn btn-primary" id="a-save">${p?'保存する':'登録する'}</button>
     </div>
@@ -2144,12 +1874,6 @@ function bindAdd() {
   // 初期状態の反映
   const trackChk = document.getElementById('a-track');
   if (trackChk && !trackChk.checked) document.getElementById('stock-mgmt-group').style.display = 'none';
-
-  // Show/hide barcode extras
-  document.getElementById('a-bc')?.addEventListener('input', e => {
-    const ex = document.getElementById('bc-extras');
-    if (ex) ex.style.display = e.target.value.trim() ? '' : 'none';
-  });
 
   // 容量変更時の在庫換算プレビュー（編集モードかつ既存在庫あり）
   const ep = S.editProduct;
@@ -2216,8 +1940,6 @@ async function saveProduct() {
         S.cache.products.push({group_id:gid, name, unit, volume, volume_unit:volUnit, track_stock:trackStock, manual_days_per_unit:manualDays, created_at:new Date().toLocaleString('ja-JP')});
         const qty = parseInt(document.getElementById('a-qty')?.value)||0;
         S.cache.inventory.push({group_id:gid, qty, alert_threshold:thr, alert_mode:alertMode, updated_at:new Date().toLocaleString('ja-JP')});
-        const bc = document.getElementById('a-bc')?.value?.trim();
-        if (bc) S.cache.barcodes.push({barcode:bc, group_id:gid, store_name:'', price:'', memo:'', created_at:new Date().toLocaleString('ja-JP')});
       }
       toast(isEdit?'更新しました（デモ）':'登録しました（デモ）');
       go('home'); return;
@@ -2239,12 +1961,6 @@ async function saveProduct() {
     if (!isEdit) {
       const qty = parseInt(document.getElementById('a-qty')?.value)||0;
       if (qty>0) await apiPost({action:'stockAction', group_id:gid, product_name:name, barcode:'', move:'set', qty, user:S.user});
-      const bc = document.getElementById('a-bc')?.value?.trim();
-      if (bc) {
-        const store = document.getElementById('a-store')?.value?.trim()||'';
-        const price = document.getElementById('a-price')?.value?.trim()||'';
-        await apiPost({action:'upsertBarcode', barcode:bc, group_id:gid, store_name:store, price, memo:''});
-      }
     }
     toast(isEdit?'更新しました':'登録しました');
     if (S.cache) {
@@ -2259,8 +1975,6 @@ async function saveProduct() {
         S.cache.inventory = S.cache.inventory||[];
         S.cache.products.push({group_id:gid, name, unit, volume, volume_unit:volUnit, track_stock:trackStock, manual_days_per_unit:manualDays, created_at:new Date().toLocaleString('ja-JP')});
         S.cache.inventory.push({group_id:gid, qty:qty2, alert_threshold:thr, alert_mode:alertMode, updated_at:new Date().toLocaleString('ja-JP')});
-        const bc2 = document.getElementById('a-bc')?.value?.trim();
-        if (bc2) { const store2=document.getElementById('a-store')?.value?.trim()||''; const price2=document.getElementById('a-price')?.value?.trim()||''; (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bc2, group_id:gid, store_name:store2, price:price2, memo:'', created_at:new Date().toLocaleString('ja-JP')}); }
       }
       saveLocalCache();
     }
@@ -2438,22 +2152,6 @@ function renderSettings() {
         <button class="btn btn-secondary" id="st-test">🔌 接続テスト</button>
       </div>
 
-      <div class="card" style="margin-top:10px;">
-        <div class="card-title">外部API（価格・商品名自動取得）</div>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6;">JANコードからYahoo!ショッピングの最安値を自動取得します。</p>
-        <div class="form-group">
-          <label class="form-label">Yahoo!ショッピング Application ID</label>
-          <input class="form-input" id="st-yahoo" type="text" placeholder="dj00aiZp..." value="${esc(S.yahooKey)}">
-        </div>
-        <div class="form-group">
-          <label class="form-label">楽天市場 Application ID</label>
-          <input class="form-input" id="st-rakuten" type="text" placeholder="1234567890123456789" value="${esc(S.rakutenKey)}">
-        </div>
-        <p style="font-size:11px;color:var(--muted);background:rgba(0,229,160,0.06);border:1px solid var(--border);border-radius:8px;padding:8px 10px;line-height:1.6;">
-          💡 Open Food Facts（食品の商品名取得）はキー不要で常時動作します。
-        </p>
-      </div>
-
       <button class="btn btn-primary" id="st-save" style="margin-top:4px;">設定を保存</button>
 
       <div class="divider" style="margin:20px 0;"></div>
@@ -2472,16 +2170,12 @@ function renderSettings() {
 }
 function bindSettings() {
   document.getElementById('st-save').addEventListener('click', () => {
-    const user       = document.getElementById('st-user').value.trim();
-    const url        = document.getElementById('st-url').value.trim();
-    const yahooKey   = document.getElementById('st-yahoo').value.trim();
-    const rakutenKey = document.getElementById('st-rakuten').value.trim();
+    const user = document.getElementById('st-user').value.trim();
+    const url  = document.getElementById('st-url').value.trim();
     if (!user) { toast('ユーザー名を入力してください','err'); return; }
-    S.user=user; S.url=url||'DEMO'; S.yahooKey=yahooKey; S.rakutenKey=rakutenKey;
-    localStorage.setItem('stockr_user',        user);
-    localStorage.setItem('stockr_url',         S.url);
-    localStorage.setItem('stockr_yahoo_key',   yahooKey);
-    localStorage.setItem('stockr_rakuten_key', rakutenKey);
+    S.user=user; S.url=url||'DEMO';
+    localStorage.setItem('stockr_user', user);
+    localStorage.setItem('stockr_url',  S.url);
     S.cache=null; S.cacheTime=0;
     if (S.url==='DEMO') { S.cache=makeDemoData(); S.cacheTime=Date.now(); }
     toast('設定を保存しました');
