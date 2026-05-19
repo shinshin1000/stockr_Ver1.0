@@ -2055,6 +2055,7 @@ function renderAdd() {
             <label class="form-label">アラートしきい値</label>
             <input class="form-input" id="a-thr" type="number" placeholder="0" value="${p?.alert_threshold??0}" inputmode="numeric">
             <p class="form-hint">この数以下になったら一覧でハイライトされます</p>
+            ${(p && Number(p.manual_days_per_unit) > 0) ? `<p class="form-hint" style="color:var(--warn);margin-top:4px;">⚠ 消費日数が ${p.manual_days_per_unit}日/個 に設定されています（仮想消費が有効）。変更するには「消費日数」モードへ切り替えてください。</p>` : ''}
           </div>
         </div>
         <div id="days-group" style="${alertMode==='days'?'':'display:none'}">
@@ -2179,7 +2180,11 @@ async function saveProduct() {
   const volUnit    = document.getElementById('a-vol-unit')?.value?.trim() || '';
   const alertMode  = document.getElementById('a-alert-mode')?.value || 'threshold';
   const trackStock = document.getElementById('a-track')?.checked ?? true;
-  const manualDays = parseFloat(document.getElementById('a-days')?.value) || 0;
+  // 消費日数は「消費日数モード」かつ「在庫管理あり」のときだけ読み取る
+  // それ以外は既存値を維持（意図しない上書きを防ぐ）、新規時は 0
+  const manualDays = (alertMode === 'days' && trackStock)
+    ? (parseFloat(document.getElementById('a-days')?.value) || 0)
+    : (S.editProduct ? (Number(S.editProduct.manual_days_per_unit) || 0) : 0);
   if (!name) { toast('商品名を入力してください','err'); return; }
 
   // ボタンを無効化して二重登録防止
