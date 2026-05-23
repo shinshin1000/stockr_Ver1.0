@@ -25,7 +25,7 @@
 
 /* ==================== RESET & BASE ==================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html { height: 100%; }
+html { height: 100%; background: #1a1d27; /* iOS白フラッシュ防止 */ }
 body {
   background: var(--bg);
   color: var(--text);
@@ -388,6 +388,10 @@ const S = {
   // Shopping mode
   viewMode: 'home',   // 'home' | 'shop'
   shopFlags: new Set(JSON.parse(localStorage.getItem('stockr_shop_flags') || '[]')),
+  // 複数人更新通知
+  lastSeenTime: parseInt(localStorage.getItem('stockr_last_seen') || '0'),
+  // 店舗名管理（非表示リスト）
+  storeIgnoreList: JSON.parse(localStorage.getItem('stockr_ignored_stores') || '[]'),
 };
 
 // ============================================================
@@ -437,6 +441,28 @@ async function getAllData(force = false) {
     }
     return data;
   } catch(e) { return { ok: false, error: e.message }; }
+}
+
+// ============================================================
+// 複数人更新通知
+// ============================================================
+function checkMultiUserUpdates(data) {
+  if (!data?.ok || !S.user || S.url === 'DEMO') return;
+  const now = Date.now();
+  const since = S.lastSeenTime;
+  S.lastSeenTime = now;
+  try { localStorage.setItem('stockr_last_seen', String(now)); } catch(e) {}
+  if (!since) return; // 初回起動時は通知しない
+  const newByOther = (data.history || []).filter(h => {
+    if (!h.timestamp || !h.user || h.user === S.user) return false;
+    return new Date(h.timestamp).getTime() > since;
+  });
+  if (!newByOther.length) return;
+  const byUser = {};
+  newByOther.forEach(h => { byUser[h.user] = (byUser[h.user] || 0) + 1; });
+  Object.entries(byUser).forEach(([user, count]) => {
+    setTimeout(() => toast(`👥 ${user} が ${count}件更新しました`, 'info'), 400);
+  });
 }
 
 // Build merged product rows (products + inventory + latest price)
@@ -757,9 +783,10 @@ async function bindHome() {
     if (btn) btn.style.cssText = `font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}`;
     paintHomeList();
   });
-  // キャッシュがあれば即表示、バックグラウンドで最新を取得
-  if (S.cache) { paintHomeList(); }
-  getAllData().then(d => { if (d?.ok) { S.cache = d; paintHomeList(); } });
+  // 即時表示（キャッシュあり→即表示、なし→ローディング表示）
+  paintHomeList();
+  // バックグラウンドで最新データ取得
+  getAllData().then(d => { if (d?.ok) { S.cache = d; checkMultiUserUpdates(d); paintHomeList(); } });
 }
 // ============================================================
 // PRICE RECORD (在庫増減なし・価格のみ記録)
@@ -910,11 +937,12 @@ function showBulkAdd() {
   });
 }
 
-// 登録済み店舗名の一覧を取得
+// 登録済み店舗名の一覧を取得（バーコード＋履歴から収集、非表示リストを除外）
 function getUniqueStores() {
   const stores = new Set();
   (S.cache?.barcodes || []).forEach(b => { if (b.store_name) stores.add(String(b.store_name)); });
-  return [...stores].sort();
+  (S.cache?.history  || []).forEach(h => { if (h.store_name) stores.add(String(h.store_name)); });
+  return [...stores].filter(s => !S.storeIgnoreList.includes(s)).sort();
 }
 
 // 過去に使った容量単位 + デフォルト一覧
@@ -1160,7 +1188,22 @@ function paintHomeListSkeleton() {
 function paintHomeList() {
   const el = document.getElementById('home-list'); if (!el) return;
   const data = S.cache;
-  if (!data) { el.innerHTML = '<div class="loading"><div class="spinner"></div>読み込み中…</div>'; return; }
+  if (!data) {
+    el.innerHTML = `
+      <div style="padding:48px 24px;text-align:center;">
+        <div class="spinner" style="margin:0 auto 18px;width:32px;height:32px;border-width:3px;"></div>
+        <div style="font-size:15px;color:var(--text);margin-bottom:10px;font-weight:600;">データを読み込み中…</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          久しぶりの起動時はサーバー起動のため<br>最大30秒ほどかかる場合があります。<br>このまましばらくお待ちください。
+        </div>
+        <button id="home-retry-btn" class="btn btn-secondary" style="margin-top:20px;padding:10px 24px;font-size:13px;width:auto;">↺ 再読み込み</button>
+      </div>`;
+    document.getElementById('home-retry-btn')?.addEventListener('click', () => {
+      S.cache = null; S.cacheTime = 0;
+      go('home');
+    });
+    return;
+  }
   if (!data.ok) { el.innerHTML = `<div class="empty"><div class="ei">⚠️</div><p>${esc(data.error||'取得エラー')}</p></div>`; return; }
 
   let prods = buildProducts(data);
@@ -1191,7 +1234,21 @@ function paintHomeList() {
     if (!prods.length) {
       html += `<div class="empty" style="padding-top:16px;"><div class="ei">🛒</div><p>買い物リストは空です<br><span style="font-size:12px;">「＋ 商品を追加」か在庫画面の 🛒 で追加できます</span></p></div>`;
     } else {
-      html += prods.map(p => {
+      // 店舗別にグループ化
+      const storeGroups = {}; // storeName -> [p]
+      prods.forEach(p => {
+        const store = p.latestStore || '（店舗未設定）';
+        if (!storeGroups[store]) storeGroups[store] = [];
+        storeGroups[store].push(p);
+      });
+      // 店舗順：実店舗を五十音順、未設定を末尾
+      const storeOrder = Object.keys(storeGroups).sort((a, b) => {
+        if (a === '（店舗未設定）') return 1;
+        if (b === '（店舗未設定）') return -1;
+        return a.localeCompare(b, 'ja');
+      });
+      // 各グループのアイテムHTML
+      const shopItemHtml = p => {
         const dr = p.track_stock ? calcDaysRemaining(p) : null;
         const drColor = dr === null ? '' : dr <= 3 ? 'var(--danger)' : dr <= 10 ? 'var(--warn)' : 'var(--muted)';
         const urgency = dr !== null
@@ -1208,13 +1265,23 @@ function paintHomeList() {
             ${urgency}
           </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-            ${qtyDisp}${p.latestPrice ? ` · ¥${p.latestPrice.toLocaleString()}${p.latestStore ? `（${esc(p.latestStore)}）` : ''}` : ''}
+            ${qtyDisp}${p.latestPrice ? ` · ¥${p.latestPrice.toLocaleString()}` : ''}
           </div>
           <div style="display:flex;gap:8px;">
             ${isFlagged ? `<button class="shop-remove btn btn-secondary" data-gid="${p.group_id}" style="padding:9px 14px;font-size:13px;">✕ 外す</button>` : ''}
             <button class="shop-buy btn btn-primary" data-gid="${p.group_id}" style="flex:1;padding:11px;font-size:14px;">${p.track_stock ? '📥 入庫' : '✓ 買った'}</button>
           </div>
         </div>`;
+      };
+      html += storeOrder.map(store => {
+        const items = storeGroups[store];
+        const isUnset = store === '（店舗未設定）';
+        return `
+          <div style="padding:6px 16px 4px;background:var(--surface);border-bottom:2px solid var(--border);position:sticky;top:0;z-index:5;">
+            <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${isUnset?'var(--muted)':'var(--accent)'};">${isUnset?'❓':'🏪'} ${esc(store)}</span>
+            <span style="font-size:11px;color:var(--muted);margin-left:6px;">${items.length}品</span>
+          </div>
+          ${items.map(p => shopItemHtml(p)).join('')}`;
       }).join('');
     }
     el.innerHTML = html;
@@ -1978,10 +2045,13 @@ async function saveProduct() {
   const alertMode  = document.getElementById('a-alert-mode')?.value || 'threshold';
   const trackStock = document.getElementById('a-track')?.checked ?? true;
   // 消費日数は「消費日数モード」かつ「在庫管理あり」のときだけ読み取る
-  // それ以外は既存値を維持（意図しない上書きを防ぐ）、新規時は 0
+  // 「管理しない」or 在庫管理オフ → 0に明示クリア（仮想消費を停止）
+  // しきい値モード → 既存値を維持
   const manualDays = (alertMode === 'days' && trackStock)
     ? (parseFloat(document.getElementById('a-days')?.value) || 0)
-    : (S.editProduct ? (Number(S.editProduct.manual_days_per_unit) || 0) : 0);
+    : (alertMode === 'none' || !trackStock)
+      ? 0
+      : (S.editProduct ? (Number(S.editProduct.manual_days_per_unit) || 0) : 0);
   if (!name) { toast('商品名を入力してください','err'); return; }
 
   // ボタンを無効化して二重登録防止
@@ -2248,6 +2318,12 @@ function renderSettings() {
         <button class="btn btn-ghost" id="st-reset">⚠️ アプリをリセット（設定を消去）</button>
       </div>
 
+      <div class="card">
+        <div class="card-title">店舗名管理</div>
+        <p class="form-hint" style="margin-bottom:12px;">入庫フォームの候補に出したくない店舗名を非表示にできます。データ自体は削除されません。</p>
+        <div id="store-manage-list"><div style="font-size:13px;color:var(--muted);">（キャッシュ読み込み後に表示されます）</div></div>
+      </div>
+
       <p style="text-align:center;font-size:11px;color:var(--muted);margin-top:24px;">STOCKR v1.0 ${isDemo?'— デモモード':''}</p>
     </div>
   `;
@@ -2299,6 +2375,39 @@ function bindSettings() {
     S.url=''; S.user=''; S.cache=null;
     render();
   });
+
+  // 店舗名管理
+  function renderStoreMgmt() {
+    const el = document.getElementById('store-manage-list'); if (!el) return;
+    // 全店舗（非表示含む）
+    const allStores = new Set();
+    (S.cache?.barcodes || []).forEach(b => { if (b.store_name) allStores.add(String(b.store_name)); });
+    (S.cache?.history  || []).forEach(h => { if (h.store_name) allStores.add(String(h.store_name)); });
+    const sorted = [...allStores].sort();
+    if (!sorted.length) { el.innerHTML = '<div style="font-size:13px;color:var(--muted);">登録された店舗名はありません</div>'; return; }
+    el.innerHTML = sorted.map(s => {
+      const hidden = S.storeIgnoreList.includes(s);
+      return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="font-size:14px;${hidden?'color:var(--muted);text-decoration:line-through;':''}">${esc(s)}</span>
+        <button class="btn ${hidden?'btn-secondary':'btn-ghost'} store-hide-btn" data-store="${esc(s)}"
+          style="font-size:12px;padding:5px 12px;width:auto;">${hidden?'表示に戻す':'非表示'}</button>
+      </div>`;
+    }).join('');
+    el.querySelectorAll('.store-hide-btn').forEach(btn => btn.addEventListener('click', () => {
+      const store = btn.dataset.store;
+      const idx = S.storeIgnoreList.indexOf(store);
+      if (idx >= 0) S.storeIgnoreList.splice(idx, 1);
+      else S.storeIgnoreList.push(store);
+      try { localStorage.setItem('stockr_ignored_stores', JSON.stringify(S.storeIgnoreList)); } catch(e) {}
+      renderStoreMgmt();
+      toast(idx >= 0 ? `「${store}」を表示に戻しました` : `「${store}」を非表示にしました`, 'info');
+    }));
+  }
+  renderStoreMgmt();
+  // キャッシュ取得後に再描画
+  if (!S.cache) {
+    getAllData().then(d => { if (d?.ok) { S.cache = d; renderStoreMgmt(); } });
+  }
 }
 
 // ============================================================
@@ -2324,7 +2433,7 @@ if (S.url && S.url !== 'DEMO') {
   if (!S.cache || cacheAge > FRESH_TTL) {
     // キャッシュが古い or ない → GASから最新データ取得
     getAllData(true).then(d => {
-      if (d?.ok) { S.cache = d; paintHomeList?.(); }
+      if (d?.ok) { S.cache = d; checkMultiUserUpdates(d); paintHomeList?.(); }
     });
   } else {
     // キャッシュが新鮮 → GASをウォームアップだけして次回を高速化
