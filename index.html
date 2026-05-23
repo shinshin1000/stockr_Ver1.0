@@ -1183,9 +1183,13 @@ function paintHomeList() {
       const bDr = b.track_stock ? (calcDaysRemaining(b) ?? 9999) : 9999;
       return aDr - bDr;
     });
-    let html = '';
+    // 買い物モード: 上部に「＋ 追加」ボタン
+    const addBtnHtml = `<div style="padding:10px 16px 4px;text-align:right;">
+      <button id="shop-add-btn" class="btn btn-secondary" style="font-size:13px;padding:8px 16px;">＋ 商品を追加</button>
+    </div>`;
+    let html = addBtnHtml;
     if (!prods.length) {
-      html = `<div class="empty"><div class="ei">🛒</div><p>買い物リストは空です<br><span style="font-size:12px;">在庫が少ない商品が自動で追加されます</span></p></div>`;
+      html += `<div class="empty" style="padding-top:16px;"><div class="ei">🛒</div><p>買い物リストは空です<br><span style="font-size:12px;">「＋ 商品を追加」か在庫画面の 🛒 で追加できます</span></p></div>`;
     } else {
       html += prods.map(p => {
         const dr = p.track_stock ? calcDaysRemaining(p) : null;
@@ -1214,6 +1218,8 @@ function paintHomeList() {
       }).join('');
     }
     el.innerHTML = html;
+    // 「＋ 商品を追加」ボタン
+    document.getElementById('shop-add-btn')?.addEventListener('click', () => showShopAddModal(allProds));
     // ↓ fall through to event delegation (no return here!)
 
   } else {
@@ -1298,7 +1304,13 @@ function paintHomeList() {
           </div>
           <div class="pi-btns">
             ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
-            <button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加" style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px;opacity:${S.shopFlags.has(String(p.group_id))?'1':'0.3'};">🛒</button>
+            ${priceOnly
+              ? `<button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加/外す"
+                   style="background:${S.shopFlags.has(String(p.group_id))?'var(--accent)':'var(--surface2)'};border:1px solid ${S.shopFlags.has(String(p.group_id))?'var(--accent)':'var(--border)'};border-radius:8px;font-size:15px;cursor:pointer;padding:6px 10px;color:${S.shopFlags.has(String(p.group_id))?'var(--bg)':'var(--muted)'};">
+                   🛒
+                 </button>`
+              : `<button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加/外す"
+                   style="background:none;border:none;font-size:18px;cursor:pointer;padding:4px;opacity:${S.shopFlags.has(String(p.group_id))?'1':'0.3'};">🛒</button>`}
           </div>
         </div>`;
       }).join('');
@@ -1345,6 +1357,61 @@ function paintHomeList() {
   };
   el.addEventListener('click', el._clickHandler);
 }
+// 買い物モード: 商品を追加するモーダル
+function showShopAddModal(allProds) {
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  const renderList = (q) => {
+    const term = q.toLowerCase();
+    const filtered = allProds.filter(p =>
+      (!term || p.name.toLowerCase().includes(term))
+    ).sort((a,b) => a.name.localeCompare(b.name,'ja'));
+    return filtered.map(p => {
+      const flagged = S.shopFlags.has(String(p.group_id));
+      const sub = p.track_stock
+        ? (calcDaysRemaining(p) !== null ? `残${calcDaysRemaining(p)}日` : `${p.qty}${esc(p.unit)}`)
+        : '価格のみ';
+      return `<button class="btn ${flagged?'btn-primary':'btn-secondary'} shop-modal-item"
+        data-gid="${p.group_id}" style="text-align:left;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;">
+        <span>
+          <span style="font-weight:700;">${esc(p.name)}</span>
+          <span style="font-size:11px;color:${flagged?'rgba(255,255,255,0.7)':'var(--muted)'};margin-left:8px;">${sub}</span>
+        </span>
+        <span style="font-size:18px;margin-left:8px;">${flagged?'✓':'＋'}</span>
+      </button>`;
+    }).join('') || '<p style="text-align:center;color:var(--muted);padding:16px;">商品が見つかりません</p>';
+  };
+  ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
+    <h2 style="margin-bottom:12px;">🛒 買い物リストに追加</h2>
+    <input class="form-input" id="shop-modal-q" type="text" placeholder="🔍 商品名で検索…" style="margin-bottom:12px;" autocomplete="off">
+    <div id="shop-modal-list" style="max-height:55vh;overflow-y:auto;">${renderList('')}</div>
+    <button class="btn btn-secondary" id="shop-modal-close" style="margin-top:8px;">閉じる</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const listEl = document.getElementById('shop-modal-list');
+  document.getElementById('shop-modal-q').addEventListener('input', e => {
+    listEl.innerHTML = renderList(e.target.value);
+  });
+  ov.addEventListener('click', e => {
+    if (e.target.id === 'shop-modal-close' || e.target === ov) { ov.remove(); return; }
+    const btn = e.target.closest('.shop-modal-item');
+    if (!btn) return;
+    const gid = btn.dataset.gid;
+    if (S.shopFlags.has(gid)) { S.shopFlags.delete(gid); } else { S.shopFlags.add(gid); }
+    saveShopFlags();
+    // ボタンの見た目をその場で更新
+    const p = allProds.find(x => String(x.group_id) === gid);
+    const flagged = S.shopFlags.has(gid);
+    const sub = p
+      ? (p.track_stock ? (calcDaysRemaining(p) !== null ? `残${calcDaysRemaining(p)}日` : `${p.qty}${esc(p.unit)}`) : '価格のみ')
+      : '';
+    btn.className = `btn ${flagged?'btn-primary':'btn-secondary'} shop-modal-item`;
+    btn.style.textAlign='left'; btn.style.marginBottom='8px'; btn.style.display='flex';
+    btn.style.alignItems='center'; btn.style.justifyContent='space-between'; btn.style.padding='12px 14px';
+    btn.innerHTML = `<span><span style="font-weight:700;">${esc(p?.name||gid)}</span><span style="font-size:11px;color:${flagged?'rgba(255,255,255,0.7)':'var(--muted)'};margin-left:8px;">${sub}</span></span><span style="font-size:18px;margin-left:8px;">${flagged?'✓':'＋'}</span>`;
+    paintHomeList(); // バックグラウンドでリスト更新
+  });
+}
+
 async function quickStock(p, action, qty) {
   if (S.quickLock[p.group_id]) return; // 連続クリック防止
   S.quickLock[p.group_id] = true;
