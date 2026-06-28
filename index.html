@@ -496,8 +496,9 @@ function buildProducts(data) {
     const volume = Number(p.volume) || 0;
     const unitPrice  = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
     const stockValue = latestPrice > 0 ? qty * latestPrice : null;
-    // 仮想消費量: manual_days_per_unitが設定されている場合、最終更新からの経過日数で自動減算
+    // 仮想消費量: 「消費日数モード」の時だけ有効（しきい値/管理しないに切替えたら即停止）
     const virtualQty = (() => {
+      if (alertMode !== 'days') return null;
       if (!manualDaysPerUnit || manualDaysPerUnit <= 0 || !inv.updated_at) return null;
       const lastUpdate = new Date(inv.updated_at);
       if (isNaN(lastUpdate.getTime())) return null;
@@ -993,8 +994,8 @@ function calcConsumptionStats(p) {
   }
 
   const estBestDays = daysFromOut ?? daysFromIn;
-  // 手動設定の消費日数があればそちらを優先（仮想消費量ベースで計算）
-  const manualDays = Number(p.manual_days_per_unit) || 0;
+  // 手動設定の消費日数は「消費日数モード」の時だけ優先（モード切替後は履歴ベースの推定にフォールバック）
+  const manualDays = (p.alert_mode === 'days') ? (Number(p.manual_days_per_unit) || 0) : 0;
   const manualBestDays = manualDays > 0 ? Math.round(dQty * manualDays) : null;
   const bestDays = manualBestDays ?? estBestDays;
   return { daysFromOut, daysFromIn, avgDaysPerUnit, purchaseCycleDays, bestDays, manualBestDays, estBestDays };
@@ -1247,29 +1248,28 @@ function paintHomeList() {
         if (b === '（店舗未設定）') return -1;
         return a.localeCompare(b, 'ja');
       });
-      // 各グループのアイテムHTML
+      // 各グループのアイテムHTML — 商品名・価格・内容量を一目でわかる形に整理
       const shopItemHtml = p => {
         const dr = p.track_stock ? calcDaysRemaining(p) : null;
         const drColor = dr === null ? '' : dr <= 3 ? 'var(--danger)' : dr <= 10 ? 'var(--warn)' : 'var(--muted)';
         const urgency = dr !== null
-          ? `<span style="font-size:13px;font-weight:700;color:${drColor};white-space:nowrap;">残${dr}日</span>`
-          : (p.isLow ? `<span style="font-size:12px;font-weight:700;color:var(--danger);">残少</span>` : '');
-        const qtyDisp = p.track_stock
-          ? `${p.virtualQty !== null ? p.displayQty.toFixed(1) : p.qty}${esc(p.unit)}`
-          : '価格のみ';
+          ? `<span style="font-size:12px;font-weight:700;color:${drColor};white-space:nowrap;flex-shrink:0;">残${dr}日</span>`
+          : (p.isLow ? `<span style="font-size:11px;font-weight:700;color:var(--danger);flex-shrink:0;">残少</span>` : '');
+        const volDisp = Number(p.volume) > 0 ? `${p.volume}${esc(p.volume_unit||'')}` : '';
         const isFlagged = S.shopFlags.has(String(p.group_id));
         return `
         <div class="product-item" data-gid="${p.group_id}" style="padding:14px 16px;border-bottom:1px solid var(--border);">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-            <div style="font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:8px;">${esc(p.name)}</div>
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px;">
+            <div style="font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>
             ${urgency}
           </div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-            ${qtyDisp}${p.latestPrice ? ` · ¥${p.latestPrice.toLocaleString()}` : ''}
+          <div style="display:flex;gap:16px;font-size:13px;color:var(--muted);margin-bottom:12px;">
+            <span>💴 ${p.latestPrice ? `<strong style="color:var(--text);">¥${p.latestPrice.toLocaleString()}</strong>` : '<span style="opacity:0.6;">未登録</span>'}</span>
+            ${volDisp ? `<span>📦 ${esc(volDisp)}</span>` : ''}
           </div>
-          <div style="display:flex;gap:8px;">
-            ${isFlagged ? `<button class="shop-remove btn btn-secondary" data-gid="${p.group_id}" style="padding:9px 14px;font-size:13px;">✕ 外す</button>` : ''}
+          <div style="display:flex;gap:8px;align-items:center;">
             <button class="shop-buy btn btn-primary" data-gid="${p.group_id}" style="flex:1;padding:11px;font-size:14px;">${p.track_stock ? '📥 入庫' : '✓ 買った'}</button>
+            ${isFlagged ? `<button class="shop-remove" data-gid="${p.group_id}" title="リストから外す" style="flex-shrink:0;background:none;border:none;color:var(--muted);font-size:20px;line-height:1;padding:8px 6px;">✕</button>` : ''}
           </div>
         </div>`;
       };
@@ -2044,14 +2044,11 @@ async function saveProduct() {
   const volUnit    = document.getElementById('a-vol-unit')?.value?.trim() || '';
   const alertMode  = document.getElementById('a-alert-mode')?.value || 'threshold';
   const trackStock = document.getElementById('a-track')?.checked ?? true;
-  // 消費日数は「消費日数モード」かつ「在庫管理あり」のときだけ読み取る
-  // 「管理しない」or 在庫管理オフ → 0に明示クリア（仮想消費を停止）
-  // しきい値モード → 既存値を維持
+  // 消費日数（仮想消費）は「消費日数モード」かつ「在庫管理あり」の時だけ有効
+  // 他モードに切り替えたら必ず0にクリアして仮想消費を停止する
   const manualDays = (alertMode === 'days' && trackStock)
     ? (parseFloat(document.getElementById('a-days')?.value) || 0)
-    : (alertMode === 'none' || !trackStock)
-      ? 0
-      : (S.editProduct ? (Number(S.editProduct.manual_days_per_unit) || 0) : 0);
+    : 0;
   if (!name) { toast('商品名を入力してください','err'); return; }
 
   // ボタンを無効化して二重登録防止
