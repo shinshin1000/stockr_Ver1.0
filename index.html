@@ -4,8 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1d27">
+<meta name="theme-color" content="#1a1d27" id="theme-color-meta">
 <title>STOCKR</title>
+<script>
+// 描画前にテーマを確定させ、フラッシュ（一瞬違う配色が見える現象）を防ぐ
+(function(){
+  try {
+    var t = localStorage.getItem('stockr_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  } catch(e) {}
+})();
+</script>
 <style>
 /* ==================== VARIABLES ==================== */
 :root {
@@ -21,11 +30,46 @@
   --border:   #32374f;
   --radius:   12px;
   --nav-h:    64px;
+  --accent-tint-weak:   rgba(0,229,160,0.07);
+  --accent-tint:        rgba(0,229,160,0.12);
+  --accent-shadow:      rgba(0,229,160,0.35);
+  --danger-tint-weak:   rgba(255,77,106,0.10);
+  --danger-tint:        rgba(255,77,106,0.12);
+  --danger-tint-strong: rgba(255,77,106,0.30);
+  --warn-tint:          rgba(255,179,71,0.08);
+  --set-tint:           rgba(140,140,255,0.12);
+  --shadow-soft:        rgba(0,0,0,0.30);
+  --overlay-bg:         rgba(0,0,0,0.65);
+  --on-accent-soft:     rgba(26,29,39,0.60);
+}
+/* ==================== ライトテーマ（白・ベージュ基調） ==================== */
+:root[data-theme="light"] {
+  --bg:       #f7f3ea;
+  --surface:  #ffffff;
+  --surface2: #f1ebdc;
+  --accent:   #16a06c;
+  --accent-d: #0f8a5c;
+  --text:     #2c2a25;
+  --muted:    #8c8473;
+  --danger:   #d6304f;
+  --warn:     #b56a12;
+  --border:   #e6ddc8;
+  --accent-tint-weak:   rgba(22,160,108,0.08);
+  --accent-tint:        rgba(22,160,108,0.13);
+  --accent-shadow:      rgba(22,160,108,0.25);
+  --danger-tint-weak:   rgba(214,48,79,0.08);
+  --danger-tint:        rgba(214,48,79,0.12);
+  --danger-tint-strong: rgba(214,48,79,0.25);
+  --warn-tint:          rgba(181,106,18,0.10);
+  --set-tint:           rgba(95,95,214,0.13);
+  --shadow-soft:        rgba(0,0,0,0.10);
+  --overlay-bg:         rgba(0,0,0,0.45);
+  --on-accent-soft:     rgba(247,243,234,0.80);
 }
 
 /* ==================== RESET & BASE ==================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-html { height: 100%; background: #1a1d27; /* iOS白フラッシュ防止 */ }
+html { height: 100%; background: var(--bg); /* テーマに応じた背景色（iOS白フラッシュ防止） */ }
 body {
   background: var(--bg);
   color: var(--text);
@@ -112,7 +156,7 @@ input { font-family: inherit; }
 .btn-primary  { background: var(--accent); color: var(--bg); }
 .btn-secondary{ background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-danger   { background: var(--danger); color: #fff; }
-.btn-ghost    { background: rgba(255,77,106,0.12); color: var(--danger); border: 1px solid rgba(255,77,106,0.3); }
+.btn-ghost    { background: var(--danger-tint); color: var(--danger); border: 1px solid var(--danger-tint-strong); }
 .btn + .btn   { margin-top: 8px; }
 .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 
@@ -175,7 +219,7 @@ input { font-family: inherit; }
 /* ==================== ALERT BANNER ==================== */
 .alert-banner {
   display: flex; align-items: center; gap: 10px;
-  background: rgba(255,179,71,0.08); border: 1.5px solid var(--warn);
+  background: var(--warn-tint); border: 1.5px solid var(--warn);
   border-radius: var(--radius); padding: 12px 14px;
   margin: 8px 12px 4px; cursor: pointer;
 }
@@ -214,7 +258,7 @@ input { font-family: inherit; }
   position: fixed; bottom: calc(var(--nav-h) + 16px); right: 16px;
   width: 54px; height: 54px; border-radius: 50%;
   background: var(--accent); color: var(--bg); font-size: 26px; border: none;
-  box-shadow: 0 4px 20px rgba(0,229,160,0.35);
+  box-shadow: 0 4px 20px var(--accent-shadow);
   display: flex; align-items: center; justify-content: center;
   z-index: 50; transition: transform 0.15s;
 }
@@ -223,7 +267,7 @@ input { font-family: inherit; }
   position: fixed; bottom: calc(var(--nav-h) + 80px); right: 18px;
   width: 44px; height: 44px; border-radius: 50%;
   background: var(--surface2); color: var(--accent); font-size: 18px; border: 1.5px solid var(--accent);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 2px 12px var(--shadow-soft);
   display: flex; align-items: center; justify-content: center;
   z-index: 50; transition: transform 0.15s;
 }
@@ -261,11 +305,11 @@ input { font-family: inherit; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.ok   { border-color: var(--accent); color: var(--accent); }
 .toast.err  { border-color: var(--danger); color: var(--danger); }
-.toast.info { border-color: #888; color: var(--text); }
+.toast.info { border-color: var(--muted); color: var(--text); }
 
 /* ==================== OVERLAY / MODAL ==================== */
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+  position: fixed; inset: 0; background: var(--overlay-bg);
   z-index: 200; display: flex; align-items: flex-end; justify-content: center;
 }
 .modal {
@@ -295,7 +339,7 @@ input { font-family: inherit; }
   border-radius: 10px; color: var(--muted); font-size: 14px; font-weight: 600;
   text-align: center; transition: all 0.15s;
 }
-.mode-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,160,0.07); }
+.mode-tab.active { border-color: var(--accent); color: var(--accent); background: var(--accent-tint-weak); }
 .action-display {
   background: var(--surface); border-radius: var(--radius);
   font-size: 44px; font-weight: 800; color: var(--accent);
@@ -323,14 +367,14 @@ input { font-family: inherit; }
 }
 .icon-btn:active { opacity: 0.7; }
 .icon-btn.edit   { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
-.icon-btn.delete { background: rgba(255,77,106,0.1); color: var(--danger); }
+.icon-btn.delete { background: var(--danger-tint-weak); color: var(--danger); }
 
 /* ==================== HISTORY ==================== */
 .hist-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
 .hist-icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
-.hist-icon.in  { background: rgba(0,229,160,0.12); }
-.hist-icon.out { background: rgba(255,77,106,0.12); }
-.hist-icon.set { background: rgba(140,140,255,0.12); }
+.hist-icon.in  { background: var(--accent-tint); }
+.hist-icon.out { background: var(--danger-tint); }
+.hist-icon.set { background: var(--set-tint); }
 .hist-body { flex: 1; min-width: 0; }
 .hist-name { font-weight: 600; font-size: 14px; }
 .hist-meta { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.5; }
@@ -348,7 +392,7 @@ input { font-family: inherit; }
   border: 1.5px solid var(--border); background: var(--surface);
   color: var(--muted); transition: all 0.12s;
 }
-.unit-pill.active { background: rgba(0,229,160,0.12); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.unit-pill.active { background: var(--accent-tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
 </style>
 </head>
@@ -364,6 +408,7 @@ const S = {
   url:        localStorage.getItem('stockr_url')         || '',
   user:       localStorage.getItem('stockr_user')        || '',
   sort:       localStorage.getItem('stockr_sort')        || 'name',
+  theme:      localStorage.getItem('stockr_theme')        || 'dark',
   screen: 'home',
   query:  '',
   filterMode: '', // '' = 全件 / 'soon' = 20日以内
@@ -567,6 +612,17 @@ function makeDemoData() {
       { timestamp: '2026/04/12 20:00', group_id: 'p4', product_name: 'ゴミ袋 45L', barcode: '', action: 'out', qty: 2, after_qty: 30, store_name: '', price: '', memo: '',         user: 'ケイコ' },
     ],
   };
+}
+
+// ============================================================
+// THEME
+// ============================================================
+function applyTheme(theme) {
+  S.theme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('stockr_theme', theme); } catch(e) {}
+  const meta = document.getElementById('theme-color-meta');
+  if (meta) meta.setAttribute('content', theme === 'light' ? '#f7f3ea' : '#1a1d27');
 }
 
 // ============================================================
@@ -1258,7 +1314,7 @@ function paintHomeList() {
         const volDisp = Number(p.volume) > 0 ? `${p.volume}${esc(p.volume_unit||'')}` : '';
         const isFlagged = S.shopFlags.has(String(p.group_id));
         return `
-        <div class="product-item" data-gid="${p.group_id}" style="padding:14px 16px;border-bottom:1px solid var(--border);">
+        <div class="product-item" data-gid="${p.group_id}" style="display:block;cursor:default;padding:14px 16px;border-bottom:1px solid var(--border);">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px;">
             <div style="font-weight:700;font-size:15px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>
             ${urgency}
@@ -1268,7 +1324,7 @@ function paintHomeList() {
             ${volDisp ? `<span>📦 ${esc(volDisp)}</span>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center;">
-            <button class="shop-buy btn btn-primary" data-gid="${p.group_id}" style="flex:1;padding:11px;font-size:14px;">${p.track_stock ? '📥 入庫' : '✓ 買った'}</button>
+            <button class="shop-buy btn btn-primary" data-gid="${p.group_id}" style="flex:1;min-width:0;padding:11px 8px;font-size:14px;white-space:nowrap;">${p.track_stock ? '📥 入庫' : '✓ 買った'}</button>
             ${isFlagged ? `<button class="shop-remove" data-gid="${p.group_id}" title="リストから外す" style="flex-shrink:0;background:none;border:none;color:var(--muted);font-size:20px;line-height:1;padding:8px 6px;">✕</button>` : ''}
           </div>
         </div>`;
@@ -1441,7 +1497,7 @@ function showShopAddModal(allProds) {
         data-gid="${p.group_id}" style="text-align:left;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;">
         <span>
           <span style="font-weight:700;">${esc(p.name)}</span>
-          <span style="font-size:11px;color:${flagged?'rgba(255,255,255,0.7)':'var(--muted)'};margin-left:8px;">${sub}</span>
+          <span style="font-size:11px;color:${flagged?'var(--on-accent-soft)':'var(--muted)'};margin-left:8px;">${sub}</span>
         </span>
         <span style="font-size:18px;margin-left:8px;">${flagged?'✓':'＋'}</span>
       </button>`;
@@ -1474,7 +1530,7 @@ function showShopAddModal(allProds) {
     btn.className = `btn ${flagged?'btn-primary':'btn-secondary'} shop-modal-item`;
     btn.style.textAlign='left'; btn.style.marginBottom='8px'; btn.style.display='flex';
     btn.style.alignItems='center'; btn.style.justifyContent='space-between'; btn.style.padding='12px 14px';
-    btn.innerHTML = `<span><span style="font-weight:700;">${esc(p?.name||gid)}</span><span style="font-size:11px;color:${flagged?'rgba(255,255,255,0.7)':'var(--muted)'};margin-left:8px;">${sub}</span></span><span style="font-size:18px;margin-left:8px;">${flagged?'✓':'＋'}</span>`;
+    btn.innerHTML = `<span><span style="font-weight:700;">${esc(p?.name||gid)}</span><span style="font-size:11px;color:${flagged?'var(--on-accent-soft)':'var(--muted)'};margin-left:8px;">${sub}</span></span><span style="font-size:18px;margin-left:8px;">${flagged?'✓':'＋'}</span>`;
     paintHomeList(); // バックグラウンドでリスト更新
   });
 }
@@ -1571,7 +1627,7 @@ function renderAction() {
   if (p.alert_mode === 'days' && (stats.bestDays !== null || p.manual_days_per_unit > 0)) {
     const manualDays = p.manual_days_per_unit > 0 ? Math.round(p.qty * p.manual_days_per_unit) : null;
     const estDays = stats.bestDays;
-    daysInfo = `<div class="qa" style="background:rgba(0,229,160,0.08);color:var(--accent);">📅 残り推定: ${manualDays??estDays??'?'} 日${manualDays && estDays ? ` （実績: ${estDays}日）` : ''}</div>`;
+    daysInfo = `<div class="qa" style="background:var(--accent-tint-weak);color:var(--accent);">📅 残り推定: ${manualDays??estDays??'?'} 日${manualDays && estDays ? ` （実績: ${estDays}日）` : ''}</div>`;
   }
 
   return `
@@ -2286,6 +2342,14 @@ function renderSettings() {
   return `
     <div style="padding:16px;">
       <div class="card">
+        <div class="card-title">表示テーマ</div>
+        <div class="unit-pill-row" style="margin-bottom:0;">
+          <button type="button" class="unit-pill ${S.theme==='dark'?'active':''} theme-pill" data-theme="dark" style="padding:9px 18px;font-size:14px;">🌙 ダーク</button>
+          <button type="button" class="unit-pill ${S.theme==='light'?'active':''} theme-pill" data-theme="light" style="padding:9px 18px;font-size:14px;">☀️ ライト（白・ベージュ）</button>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-title">ユーザー設定</div>
         <div class="form-group">
           <label class="form-label">ユーザー名</label>
@@ -2326,6 +2390,11 @@ function renderSettings() {
   `;
 }
 function bindSettings() {
+  document.querySelectorAll('.theme-pill').forEach(pill => pill.addEventListener('click', () => {
+    const theme = pill.dataset.theme;
+    applyTheme(theme);
+    document.querySelectorAll('.theme-pill').forEach(p => p.classList.toggle('active', p.dataset.theme === theme));
+  }));
   document.getElementById('st-save').addEventListener('click', () => {
     const user = document.getElementById('st-user').value.trim();
     const url  = document.getElementById('st-url').value.trim();
@@ -2410,6 +2479,9 @@ function bindSettings() {
 // ============================================================
 // INIT
 // ============================================================
+// テーマ用metaタグを実際の状態に同期（data-theme属性は<head>内スクリプトで既に確定済み）
+applyTheme(S.theme);
+
 // Step1: 前回のlocalStorageキャッシュを即座に読み込んで起動を高速化
 if (S.url && S.url !== 'DEMO') {
   try {
