@@ -437,6 +437,9 @@ const S = {
   lastSeenTime: parseInt(localStorage.getItem('stockr_last_seen') || '0'),
   // 店舗名管理（非表示リスト）
   storeIgnoreList: JSON.parse(localStorage.getItem('stockr_ignored_stores') || '[]'),
+  // カテゴリ（group_id → 'food' | 'daily' | ''）
+  categoryMap: JSON.parse(localStorage.getItem('stockr_categories') || '{}'),
+  categoryFilter: '',  // '' = 全件 / 'food' = 食品 / 'daily' = 日用品
 };
 
 // ============================================================
@@ -805,6 +808,11 @@ function renderHome() {
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🗺</button>
       <button class="sort-btn" id="soon-btn" title="20日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
     </div>
+    <div id="cat-filter-row" style="${S.viewMode==='shop'?'display:none;':'display:flex;'}gap:6px;padding:6px 12px 4px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
+      <button class="unit-pill cf-pill ${!S.categoryFilter?'active':''}" data-cat="" style="padding:5px 14px;font-size:13px;">すべて</button>
+      <button class="unit-pill cf-pill ${S.categoryFilter==='food'?'active':''}" data-cat="food" style="padding:5px 14px;font-size:13px;">🍱 食品</button>
+      <button class="unit-pill cf-pill ${S.categoryFilter==='daily'?'active':''}" data-cat="daily" style="padding:5px 14px;font-size:13px;">🧴 日用品</button>
+    </div>
     <div id="home-list">${S.cache ? '' : paintHomeListSkeleton()}</div>
     <button class="fab-sub" id="fab-bulk" title="まとめて登録">📋</button>
     <button class="fab" id="fab-add">＋</button>
@@ -822,6 +830,7 @@ async function bindHome() {
     document.getElementById('vm-home').className = 'btn btn-primary'; document.getElementById('vm-home').style.flex='1'; document.getElementById('vm-home').style.padding='10px';
     document.getElementById('vm-shop').className = 'btn btn-secondary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
     document.getElementById('search-wrap').style.display = '';
+    document.getElementById('cat-filter-row').style.display = 'flex';
     paintHomeList();
   });
   document.getElementById('vm-shop')?.addEventListener('click', () => {
@@ -829,6 +838,7 @@ async function bindHome() {
     document.getElementById('vm-shop').className = 'btn btn-primary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
     document.getElementById('vm-home').className = 'btn btn-secondary'; document.getElementById('vm-home').style.flex='1'; document.getElementById('vm-home').style.padding='10px';
     document.getElementById('search-wrap').style.display = 'none';
+    document.getElementById('cat-filter-row').style.display = 'none';
     paintHomeList();
   });
   document.getElementById('q')?.addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
@@ -840,6 +850,11 @@ async function bindHome() {
     if (btn) btn.style.cssText = `font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}`;
     paintHomeList();
   });
+  document.querySelectorAll('.cf-pill').forEach(pill => pill.addEventListener('click', () => {
+    S.categoryFilter = pill.dataset.cat;
+    document.querySelectorAll('.cf-pill').forEach(p => p.classList.toggle('active', p.dataset.cat === S.categoryFilter));
+    paintHomeList();
+  }));
   // 即時表示（キャッシュあり→即表示、なし→ローディング表示）
   paintHomeList();
   // バックグラウンドで最新データ取得
@@ -1369,6 +1384,9 @@ function paintHomeList() {
         return 0;
       });
     }
+    if (S.categoryFilter) {
+      prods = prods.filter(p => (S.categoryMap[p.group_id] || '') === S.categoryFilter);
+    }
     const low = prods.filter(p=>p.isLow);
     let html = '';
     if (S.filterMode === 'soon') {
@@ -1386,7 +1404,12 @@ function paintHomeList() {
       </div>`;
     }
     if (!prods.length) {
-      html += `<div class="empty"><div class="ei">${S.filterMode==='soon'?'🎉':'📦'}</div><p>${S.filterMode==='soon'?'20日以内に切れる商品はありません':S.query?'該当する商品が見つかりません':'商品がまだ登録されていません<br>＋ ボタンから追加してください'}</p></div>`;
+      const emptyIcon = S.filterMode==='soon' ? '🎉' : S.categoryFilter ? (S.categoryFilter==='food'?'🍱':'🧴') : '📦';
+      const emptyMsg  = S.filterMode==='soon' ? '20日以内に切れる商品はありません'
+        : S.query ? '該当する商品が見つかりません'
+        : S.categoryFilter ? 'このカテゴリに商品がありません<br>商品登録時にカテゴリを設定してください'
+        : '商品がまだ登録されていません<br>＋ ボタンから追加してください';
+      html += `<div class="empty"><div class="ei">${emptyIcon}</div><p>${emptyMsg}</p></div>`;
     } else {
       html += prods.map(p => {
         const priceOnly = !p.track_stock;
@@ -1934,11 +1957,21 @@ function renderAdd() {
   const alertMode  = p?.alert_mode  || 'days';
   const trackStock = p ? p.track_stock : true;
   const modeLabels = {threshold:'しきい値',days:'消費日数',none:'管理しない'};
+  const cat        = S.categoryMap[p?.group_id || ''] || '';
   return `
     <div style="padding:16px;">
       <div class="form-group">
         <label class="form-label">商品名 <span class="form-req">*</span></label>
         <input class="form-input" id="a-name" type="text" placeholder="例：牛乳 1L" value="${esc(p?.name||S.preName||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">カテゴリ</label>
+        <div class="unit-pill-row">
+          <button type="button" class="unit-pill cat-pill ${!cat?'active':''}" data-cat="">未分類</button>
+          <button type="button" class="unit-pill cat-pill ${cat==='food'?'active':''}" data-cat="food">🍱 食品</button>
+          <button type="button" class="unit-pill cat-pill ${cat==='daily'?'active':''}" data-cat="daily">🧴 日用品</button>
+        </div>
+        <input type="hidden" id="a-category" value="${esc(cat)}">
       </div>
       <div class="form-group">
         <label class="form-label">単位</label>
@@ -2034,6 +2067,13 @@ function bindAdd() {
     }
   });
 
+  // Category pills
+  document.querySelectorAll('.cat-pill').forEach(pill => pill.addEventListener('click', () => {
+    document.querySelectorAll('.cat-pill').forEach(p => p.classList.remove('active'));
+    pill.classList.add('active');
+    document.getElementById('a-category').value = pill.dataset.cat;
+  }));
+
   // Unit pills
   document.querySelectorAll('.up').forEach(pill=>pill.addEventListener('click', () => {
     document.querySelectorAll('.up').forEach(p=>p.classList.remove('active'));
@@ -2113,6 +2153,11 @@ async function saveProduct() {
 
   const isEdit = !!S.editProduct;
   const gid = isEdit ? S.editProduct.group_id : `prod_${Date.now()}`;
+
+  // カテゴリをローカルに保存（サーバー不要）
+  const category = document.getElementById('a-category')?.value || '';
+  if (category) { S.categoryMap[gid] = category; } else { delete S.categoryMap[gid]; }
+  try { localStorage.setItem('stockr_categories', JSON.stringify(S.categoryMap)); } catch(e) {}
 
   try {
     if (S.url==='DEMO') {
