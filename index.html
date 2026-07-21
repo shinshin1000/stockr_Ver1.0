@@ -1065,10 +1065,10 @@ function calcConsumptionStats(p) {
   }
 
   const estBestDays = daysFromOut ?? daysFromIn;
-  // 手動設定の消費日数は「消費日数モード」の時だけ優先（モード切替後は履歴ベースの推定にフォールバック）
+  // 「消費日数モード」以外では bestDays を返さない（threshold/none で「残り0日」が出るのを防ぐ）
   const manualDays = (p.alert_mode === 'days') ? (Number(p.manual_days_per_unit) || 0) : 0;
   const manualBestDays = manualDays > 0 ? Math.round(dQty * manualDays) : null;
-  const bestDays = manualBestDays ?? estBestDays;
+  const bestDays = p.alert_mode === 'days' ? (manualBestDays ?? estBestDays) : null;
   return { daysFromOut, daysFromIn, avgDaysPerUnit, purchaseCycleDays, bestDays, manualBestDays, estBestDays };
 }
 
@@ -1371,8 +1371,9 @@ function paintHomeList() {
     if (S.filterMode === 'soon') {
       prods = prods.filter(p => {
         if (!p.track_stock) return false;
+        if (p.isLow) return true;  // しきい値モードで在庫少
         const d = calcConsumptionStats(p).bestDays;
-        return d !== null && d <= 20;
+        return d !== null && d <= 20;  // 消費日数モードで20日以内
       });
       prods.sort((a,b) => (calcConsumptionStats(a).bestDays??999) - (calcConsumptionStats(b).bestDays??999));
     } else {
