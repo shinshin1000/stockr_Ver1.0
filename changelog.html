@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STOCKR — 更新履歴</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Segoe UI', sans-serif;
+  background: #f7f3ea;
+  color: #2c2a25;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+a { color: #16a06c; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── ヘッダー ── */
+.site-header {
+  background: #fff;
+  border-bottom: 2px solid #e6ddc8;
+  padding: 24px 20px 20px;
+  text-align: center;
+}
+.site-header h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  color: #2c2a25;
+}
+.site-header h1 span { color: #16a06c; }
+.site-header p {
+  font-size: 13px;
+  color: #8c8473;
+  margin-top: 6px;
+}
+.dev-badge {
+  display: inline-block;
+  background: #fff3cd;
+  border: 1px solid #e6c84a;
+  color: #7a6010;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  margin-top: 10px;
+  letter-spacing: 0.05em;
+}
+
+/* ── コンテンツ ── */
+.container {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 16px 60px;
+}
+
+/* ── バージョンブロック ── */
+.version-block {
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e6ddc8;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.version-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid #f0e8d8;
+  background: #faf7f2;
+}
+.version-tag {
+  font-size: 13px;
+  font-weight: 800;
+  color: #fff;
+  background: #16a06c;
+  padding: 3px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+.version-tag.fix { background: #d6304f; }
+.version-tag.old { background: #8c8473; }
+.version-date {
+  font-size: 12px;
+  color: #8c8473;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.version-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2c2a25;
+  flex: 1;
+  min-width: 0;
+}
+
+.change-list {
+  list-style: none;
+  padding: 12px 18px 14px;
+}
+.change-list li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 0;
+  font-size: 14px;
+  border-bottom: 1px solid #f7f3ea;
+}
+.change-list li:last-child { border-bottom: none; }
+.change-icon {
+  font-size: 15px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+  margin-top: 1px;
+}
+.change-text { flex: 1; color: #3a3730; }
+.change-sub {
+  display: block;
+  font-size: 12px;
+  color: #8c8473;
+  margin-top: 2px;
+}
+
+/* ── セクション区切り ── */
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8c8473;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 20px 4px 8px;
+}
+
+/* ── フッター ── */
+.site-footer {
+  text-align: center;
+  padding: 20px;
+  font-size: 12px;
+  color: #b0a898;
+  border-top: 1px solid #e6ddc8;
+}
+</style>
+</head>
+<body>
+
+<div class="site-header">
+  <h1>STOCK<span>R</span></h1>
+  <p>アプリの更新履歴 · Update History</p>
+  <div class="dev-badge">🔒 開発者用ページ</div>
+</div>
+
+<div class="container">
+
+  <div class="section-label">最新</div>
+
+  <!-- v3.2 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">カテゴリフィルター追加</span>
+      <span class="version-date">2026-07-21</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">🍱</span>
+        <span class="change-text">ホーム画面に「すべて / 食品 / 日用品」フィルターピルを追加
+          <span class="change-sub">検索バーの下に常時表示。タップで即絞り込み。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">📝</span>
+        <span class="change-text">商品登録・編集画面にカテゴリ選択を追加
+          <span class="change-sub">未分類 / 🍱 食品 / 🧴 日用品 から選ぶだけ。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">💾</span>
+        <span class="change-text">カテゴリはこの端末に保存（サーバー変更不要）
+          <span class="change-sub">既存の商品は編集画面でカテゴリを設定すれば反映されます。</span>
+        </span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v3.1 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag fix">FIX</span>
+      <span class="version-title">買い物モード レイアウト修正</span>
+      <span class="version-date">2026-06-28</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">📐</span>
+        <span class="change-text">買い物モードのカードを横並びレイアウトに変更
+          <span class="change-sub">商品名・価格・入庫ボタンが1行に収まるように。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">🔧</span>
+        <span class="change-text">長い商品名でも「入庫」ボタンが隠れなくなった
+          <span class="change-sub">名前は省略（…）、ボタンは常に右端に固定表示。</span>
+        </span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v3.0 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">ライトテーマ追加・テーマ切り替え</span>
+      <span class="version-date">2026-06-28</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">☀️</span>
+        <span class="change-text">白・ベージュ基調のライトテーマを追加
+          <span class="change-sub">設定画面から「🌙 ダーク」「☀️ ライト」を切り替え可能。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">⚡</span>
+        <span class="change-text">起動時にテーマが即座に反映（画面フラッシュを解消）</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="section-label">2026年6月</div>
+
+  <!-- v2.5 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag fix">FIX</span>
+      <span class="version-title">仮想消費バグ修正・買い物カード改善</span>
+      <span class="version-date">2026-06-28</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">🐛</span>
+        <span class="change-text">アラートモードを「管理しない」や「しきい値」に変えても在庫が「残り0日」と表示されるバグを修正
+          <span class="change-sub">「消費日数モード」でないときは仮想消費が一切動かないように修正。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">🛒</span>
+        <span class="change-text">買い物モードのカードデザインを一新</span>
+      </li>
+    </ul>
+  </div>
+
+  <div class="section-label">2026年5月</div>
+
+  <!-- v2.4 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">複数人通知・店舗並び替え・白画面改善</span>
+      <span class="version-date">2026-05-23</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">👥</span>
+        <span class="change-text">家族が更新したときに通知（トースト）が出るようになった
+          <span class="change-sub">「〇〇 が N件更新しました」と表示。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">🗺️</span>
+        <span class="change-text">買い物モードを店舗ごとにグループ表示
+          <span class="change-sub">同じ店で買うものをまとめて確認できるように。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">🗑️</span>
+        <span class="change-text">不要な店舗名を非表示にできるよう「店舗管理」を追加（設定画面）</span>
+      </li>
+      <li>
+        <span class="change-icon">⏳</span>
+        <span class="change-text">久しぶり起動時の白画面（最大30秒）に説明文と再読み込みボタンを追加</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v2.3 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">買い物リスト手動追加・初期価格入力</span>
+      <span class="version-date">2026-05-23</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">➕</span>
+        <span class="change-text">買い物モードで商品を手動でリストに追加できるモーダルを追加</span>
+      </li>
+      <li>
+        <span class="change-icon">💴</span>
+        <span class="change-text">商品登録時に初期価格・購入店舗を入力できるように</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v2.2 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag fix">FIX</span>
+      <span class="version-title">検索バー・買い物モード改善</span>
+      <span class="version-date">2026-05-20</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">🔍</span>
+        <span class="change-text">買い物モード切替時に検索バーが消える問題を修正</span>
+      </li>
+      <li>
+        <span class="change-icon">🛒</span>
+        <span class="change-text">在庫入庫後に買い物モードのボタンが反応しなくなる問題を修正</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v2.1 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">買い物モード追加</span>
+      <span class="version-date">2026-05-20</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">🛒</span>
+        <span class="change-text">「在庫」「買い物」の2モード切り替えを追加
+          <span class="change-sub">在庫が少ない商品を買い物リストとして管理できるように。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">🗺️</span>
+        <span class="change-text">店舗別買い物リスト（🗺 ボタン）を追加
+          <span class="change-sub">最安値の店舗でまとめ買いできるようグループ表示。</span>
+        </span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v2.0 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag">NEW</span>
+      <span class="version-title">Stockr v2.0 — 価格専用・アラートモード・まとめ登録</span>
+      <span class="version-date">2026-05-04</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">💴</span>
+        <span class="change-text">「価格のみ記録」モードを追加（在庫数を管理しない商品にも対応）</span>
+      </li>
+      <li>
+        <span class="change-icon">⚙️</span>
+        <span class="change-text">アラートモードを3種から選択できるように
+          <span class="change-sub">しきい値 / 消費日数（仮想消費） / 管理しない</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">📋</span>
+        <span class="change-text">📋 ボタンから複数商品をまとめて登録できるように</span>
+      </li>
+      <li>
+        <span class="change-icon">⚡</span>
+        <span class="change-text">GAS ScriptCache + 並列API対応でデータ取得を高速化</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v1.x -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag old">PREV</span>
+      <span class="version-title">消費日数・フィルター・購入サイクル</span>
+      <span class="version-date">2026-05-09 〜 05-19</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">📅</span>
+        <span class="change-text">仮想自動消費（消費日数モード）を追加
+          <span class="change-sub">最後に在庫更新した日から日数を逆算して在庫を自動推定。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">⏰</span>
+        <span class="change-text">⏰ ボタンで「20日以内に切れる商品だけ」にフィルターできるように</span>
+      </li>
+      <li>
+        <span class="change-icon">🔄</span>
+        <span class="change-text">購入サイクルを履歴から自動推定して表示</span>
+      </li>
+      <li>
+        <span class="change-icon">📝</span>
+        <span class="change-text">履歴にメモを残せるように・履歴検索機能を追加</span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- v1.0 -->
+  <div class="version-block">
+    <div class="version-header">
+      <span class="version-tag old">INIT</span>
+      <span class="version-title">Stockr v1.0 — 初期リリース</span>
+      <span class="version-date">2026-04-26</span>
+    </div>
+    <ul class="change-list">
+      <li>
+        <span class="change-icon">🚀</span>
+        <span class="change-text">在庫管理アプリとして公開
+          <span class="change-sub">Google Apps Script (GAS) + GitHub Pages の単一HTMLファイル構成。</span>
+        </span>
+      </li>
+      <li>
+        <span class="change-icon">📦</span>
+        <span class="change-text">商品登録・在庫の増減・残量アラート機能</span>
+      </li>
+      <li>
+        <span class="change-icon">💴</span>
+        <span class="change-text">バーコード読み取りで価格・店舗を記録する機能</span>
+      </li>
+    </ul>
+  </div>
+
+</div>
+
+<div class="site-footer">
+  STOCKR · 開発者用ページ · このページはアプリ内にリンクされていません
+</div>
+
+</body>
+</html>
