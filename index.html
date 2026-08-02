@@ -539,7 +539,8 @@ function buildProducts(data) {
     const alertMode = String(inv.alert_mode || 'threshold');
     const trackStock = (p.track_stock === '' || p.track_stock == null) ? true : (Number(p.track_stock) !== 0);
     const manualDaysPerUnit = Number(p.manual_days_per_unit) || 0;
-    const latestPrice = priceMap[p.group_id] || histPriceMap[p.group_id] || 0;
+    // 入庫履歴の価格を優先（バーコード登録価格より実際の購入価格を優先）
+    const latestPrice = histPriceMap[p.group_id] || priceMap[p.group_id] || 0;
     const latestStore = histStoreMap[p.group_id] || '';
     const volume = Number(p.volume) || 0;
     const unitPrice  = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
@@ -865,8 +866,6 @@ async function bindHome() {
 // ============================================================
 function showPriceRecord(p) {
   const stores = getUniqueStores();
-  const bcs    = (S.cache?.barcodes || []).filter(b => String(b.group_id) === String(p.group_id));
-  const bc     = bcs[0]?.barcode || `price_${p.group_id}`;
   const ov = document.createElement('div'); ov.className = 'overlay';
   ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
     <h2>💰 価格を記録</h2>
@@ -894,6 +893,9 @@ function showPriceRecord(p) {
     const price = document.getElementById('pr-price').value.trim();
     const memo  = document.getElementById('pr-memo').value.trim();
     if (!price) { toast('価格を入力してください','err'); return; }
+    // 店舗ごとに固有のbarcodeキーを生成（同じキーで上書きされないように）
+    const storeSlug = store ? store.replace(/[^\w　-鿿]/g, '_').slice(0, 20) : 'nk';
+    const bc = `price_${p.group_id}_${storeSlug}`;
     const btn = document.getElementById('pr-save');
     btn.disabled = true; btn.textContent = '保存中…';
     try {
