@@ -440,6 +440,8 @@ const S = {
   // カテゴリ（group_id → 'food' | 'daily' | ''）
   categoryMap: JSON.parse(localStorage.getItem('stockr_categories') || '{}'),
   categoryFilter: '',  // '' = 全件 / 'food' = 食品 / 'daily' = 日用品
+  // 消費一時停止（group_id → true）
+  pausedMap: JSON.parse(localStorage.getItem('stockr_paused') || '{}'),
 };
 
 // ============================================================
@@ -545,9 +547,10 @@ function buildProducts(data) {
     const volume = Number(p.volume) || 0;
     const unitPrice  = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
     const stockValue = latestPrice > 0 ? qty * latestPrice : null;
-    // 仮想消費量: 「消費日数モード」の時だけ有効（しきい値/管理しないに切替えたら即停止）
+    // 仮想消費量: 「消費日数モード」かつ「一時停止でない」時だけ有効
     const virtualQty = (() => {
       if (alertMode !== 'days') return null;
+      if (S.pausedMap[p.group_id]) return null;  // 消費一時停止中
       if (!manualDaysPerUnit || manualDaysPerUnit <= 0 || !inv.updated_at) return null;
       const lastUpdate = new Date(inv.updated_at);
       if (isNaN(lastUpdate.getTime())) return null;
@@ -1067,10 +1070,10 @@ function calcConsumptionStats(p) {
   }
 
   const estBestDays = daysFromOut ?? daysFromIn;
-  // 「消費日数モード」以外では bestDays を返さない（threshold/none で「残り0日」が出るのを防ぐ）
+  // 「消費日数モード」かつ「一時停止でない」時だけ bestDays を返す
   const manualDays = (p.alert_mode === 'days') ? (Number(p.manual_days_per_unit) || 0) : 0;
   const manualBestDays = manualDays > 0 ? Math.round(dQty * manualDays) : null;
-  const bestDays = p.alert_mode === 'days' ? (manualBestDays ?? estBestDays) : null;
+  const bestDays = (p.alert_mode === 'days' && !S.pausedMap[p.group_id]) ? (manualBestDays ?? estBestDays) : null;
   return { daysFromOut, daysFromIn, avgDaysPerUnit, purchaseCycleDays, bestDays, manualBestDays, estBestDays };
 }
 
@@ -1418,7 +1421,10 @@ function paintHomeList() {
         const priceOnly = !p.track_stock;
         const stats = calcConsumptionStats(p);
         const d = stats.bestDays;
-        const daysHtml = (!priceOnly && d !== null) ? (() => { const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })() : '';
+        const isPaused = p.alert_mode === 'days' && !!S.pausedMap[p.group_id];
+        const daysHtml = isPaused
+          ? ` · <span style="color:var(--muted);">⏸ 停止中</span>`
+          : (!priceOnly && d !== null) ? (() => { const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })() : '';
         const cycle = priceOnly ? null : calcPurchaseCycle(p);
         const cycleHtml = cycle && cycle.daysUntilDue < 0
           ? ` · <span style="color:var(--warn);font-weight:600;">🔔 購入時期</span>`
@@ -1961,6 +1967,7 @@ function renderAdd() {
   const trackStock = p ? p.track_stock : true;
   const modeLabels = {threshold:'しきい値',days:'消費日数',none:'管理しない'};
   const cat        = S.categoryMap[p?.group_id || ''] || '';
+  const isPaused   = p ? !!S.pausedMap[p.group_id] : false;
   return `
     <div style="padding:16px;">
       <div class="form-group">
@@ -2037,6 +2044,13 @@ function renderAdd() {
                 : '';
             })()}
           </div>
+          ${p ? `
+          <div class="form-group" style="margin-top:4px;">
+            <button type="button" id="pause-toggle" class="btn btn-secondary" style="width:100%;font-size:13px;padding:10px;border:2px solid ${isPaused?'var(--accent)':'var(--border)'};color:${isPaused?'var(--accent)':'var(--muted)'};">
+              ${isPaused ? '▶ 消費を再開する' : '⏸ 消費を一時停止する'}
+            </button>
+            <p class="form-hint" id="pause-hint">${isPaused ? '一時停止中：自動で在庫が減らなくなります' : '使わなくなった期間は一時停止できます'}</p>
+          </div>` : ''}
         </div>
       </div>
 
@@ -2068,6 +2082,20 @@ function bindAdd() {
       document.getElementById('a-days').value = cycle.suggestedDaysPerUnit;
       toast(`消費日数を${cycle.suggestedDaysPerUnit}日/個に入力しました`);
     }
+  });
+
+  // Pause toggle
+  document.getElementById('pause-toggle')?.addEventListener('click', () => {
+    const gid = S.editProduct?.group_id;
+    if (!gid) return;
+    if (S.pausedMap[gid]) { delete S.pausedMap[gid]; } else { S.pausedMap[gid] = true; }
+    try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
+    const now = !!S.pausedMap[gid];
+    const btn  = document.getElementById('pause-toggle');
+    const hint = document.getElementById('pause-hint');
+    if (btn)  { btn.textContent = now ? '▶ 消費を再開する' : '⏸ 消費を一時停止する'; btn.style.borderColor = now ? 'var(--accent)' : 'var(--border)'; btn.style.color = now ? 'var(--accent)' : 'var(--muted)'; }
+    if (hint) { hint.textContent = now ? '一時停止中：自動で在庫が減らなくなります' : '使わなくなった期間は一時停止できます'; }
+    toast(now ? '⏸ 消費を一時停止しました' : '▶ 消費を再開しました');
   });
 
   // Category pills
@@ -2161,6 +2189,12 @@ async function saveProduct() {
   const category = document.getElementById('a-category')?.value || '';
   if (category) { S.categoryMap[gid] = category; } else { delete S.categoryMap[gid]; }
   try { localStorage.setItem('stockr_categories', JSON.stringify(S.categoryMap)); } catch(e) {}
+
+  // 消費日数モード以外に切り替えたら一時停止状態をクリア（無効な状態が残らないよう）
+  if (alertMode !== 'days' && S.pausedMap[gid]) {
+    delete S.pausedMap[gid];
+    try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
+  }
 
   try {
     if (S.url==='DEMO') {
