@@ -440,6 +440,7 @@ const S = {
   // カテゴリ（group_id → 'food' | 'daily' | ''）
   categoryMap: JSON.parse(localStorage.getItem('stockr_categories') || '{}'),
   categoryFilter: '',  // '' = 全件 / 'food' = 食品 / 'daily' = 日用品
+  hidePriceOnly: false, // 価格のみ商品を非表示（ホーム）
   // 消費一時停止（group_id → true）
   pausedMap: JSON.parse(localStorage.getItem('stockr_paused') || '{}'),
 };
@@ -520,10 +521,14 @@ function buildProducts(data) {
   if (!data?.products) return [];
   const invMap = {};
   (data.inventory || []).forEach(r => { invMap[r.group_id] = r; });
-  // バーコードテーブルから商品ごとの最新価格を取得
+  // バーコードテーブルから商品ごとの最新価格・店舗を取得
   const priceMap = {};
+  const barcodeStoreMap = {};  // 価格のみ記録の店舗情報（histStoreMapのフォールバック）
   (data.barcodes || []).forEach(b => {
-    if (b.price && Number(b.price) > 0) priceMap[b.group_id] = Number(b.price);
+    if (b.price && Number(b.price) > 0) {
+      priceMap[b.group_id] = Number(b.price);
+      if (b.store_name) barcodeStoreMap[b.group_id] = b.store_name;
+    }
     // カテゴリ・一時停止をサーバーデータで上書き同期（共有のため）
     const bc = String(b.barcode || '');
     if (bc.startsWith('meta_cat_'))   S.categoryMap[b.group_id] = b.memo || '';
@@ -547,7 +552,7 @@ function buildProducts(data) {
     const manualDaysPerUnit = Number(p.manual_days_per_unit) || 0;
     // 入庫履歴の価格を優先（バーコード登録価格より実際の購入価格を優先）
     const latestPrice = histPriceMap[p.group_id] || priceMap[p.group_id] || 0;
-    const latestStore = histStoreMap[p.group_id] || '';
+    const latestStore = histStoreMap[p.group_id] || barcodeStoreMap[p.group_id] || '';
     const volume = Number(p.volume) || 0;
     const unitPrice  = (latestPrice > 0 && volume > 0) ? latestPrice / volume : null;
     const stockValue = latestPrice > 0 ? qty * latestPrice : null;
@@ -816,10 +821,11 @@ function renderHome() {
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🗺</button>
       <button class="sort-btn" id="soon-btn" title="20日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
     </div>
-    <div id="cat-filter-row" style="${S.viewMode==='shop'?'display:none;':'display:flex;'}gap:6px;padding:6px 12px 4px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
+    <div id="cat-filter-row" style="display:flex;gap:6px;padding:6px 12px 4px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
       <button class="unit-pill cf-pill ${!S.categoryFilter?'active':''}" data-cat="" style="padding:5px 14px;font-size:13px;">すべて</button>
       <button class="unit-pill cf-pill ${S.categoryFilter==='food'?'active':''}" data-cat="food" style="padding:5px 14px;font-size:13px;">🍱 食品</button>
       <button class="unit-pill cf-pill ${S.categoryFilter==='daily'?'active':''}" data-cat="daily" style="padding:5px 14px;font-size:13px;">🧴 日用品</button>
+      <button id="hide-price-btn" class="unit-pill ${S.hidePriceOnly?'active':''}" style="padding:5px 14px;font-size:13px;${S.viewMode==='shop'?'display:none':''}">💴 価格のみ隠す</button>
     </div>
     <div id="home-list">${S.cache ? '' : paintHomeListSkeleton()}</div>
     <button class="fab-sub" id="fab-bulk" title="まとめて登録">📋</button>
@@ -839,6 +845,7 @@ async function bindHome() {
     document.getElementById('vm-shop').className = 'btn btn-secondary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
     document.getElementById('search-wrap').style.display = '';
     document.getElementById('cat-filter-row').style.display = 'flex';
+    document.getElementById('hide-price-btn').style.display = '';
     paintHomeList();
   });
   document.getElementById('vm-shop')?.addEventListener('click', () => {
@@ -846,7 +853,8 @@ async function bindHome() {
     document.getElementById('vm-shop').className = 'btn btn-primary'; document.getElementById('vm-shop').style.flex='1'; document.getElementById('vm-shop').style.padding='10px';
     document.getElementById('vm-home').className = 'btn btn-secondary'; document.getElementById('vm-home').style.flex='1'; document.getElementById('vm-home').style.padding='10px';
     document.getElementById('search-wrap').style.display = 'none';
-    document.getElementById('cat-filter-row').style.display = 'none';
+    document.getElementById('cat-filter-row').style.display = 'flex';
+    document.getElementById('hide-price-btn').style.display = 'none';
     paintHomeList();
   });
   document.getElementById('q')?.addEventListener('input', e => { S.query = e.target.value; paintHomeList(); });
@@ -863,6 +871,11 @@ async function bindHome() {
     document.querySelectorAll('.cf-pill').forEach(p => p.classList.toggle('active', p.dataset.cat === S.categoryFilter));
     paintHomeList();
   }));
+  document.getElementById('hide-price-btn')?.addEventListener('click', () => {
+    S.hidePriceOnly = !S.hidePriceOnly;
+    document.getElementById('hide-price-btn').classList.toggle('active', S.hidePriceOnly);
+    paintHomeList();
+  });
   // 即時表示（キャッシュあり→即表示、なし→ローディング表示）
   paintHomeList();
   // バックグラウンドで最新データ取得
@@ -1299,6 +1312,10 @@ function paintHomeList() {
       const dr = calcDaysRemaining(p);
       return dr !== null && dr <= 20;
     });
+    // 買い物モードでもカテゴリフィルターを適用（手動追加済みはフィルター対象外）
+    if (S.categoryFilter) {
+      prods = prods.filter(p => S.shopFlags.has(String(p.group_id)) || (S.categoryMap[p.group_id] || '') === S.categoryFilter);
+    }
     prods.sort((a, b) => {
       const aManual = S.shopFlags.has(String(a.group_id)) && !a.track_stock;
       const bManual = S.shopFlags.has(String(b.group_id)) && !b.track_stock;
@@ -1396,6 +1413,9 @@ function paintHomeList() {
     }
     if (S.categoryFilter) {
       prods = prods.filter(p => (S.categoryMap[p.group_id] || '') === S.categoryFilter);
+    }
+    if (S.hidePriceOnly) {
+      prods = prods.filter(p => p.track_stock);
     }
     const low = prods.filter(p=>p.isLow);
     let html = '';
