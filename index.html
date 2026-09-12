@@ -524,6 +524,10 @@ function buildProducts(data) {
   const priceMap = {};
   (data.barcodes || []).forEach(b => {
     if (b.price && Number(b.price) > 0) priceMap[b.group_id] = Number(b.price);
+    // カテゴリ・一時停止をサーバーデータで上書き同期（共有のため）
+    const bc = String(b.barcode || '');
+    if (bc.startsWith('meta_cat_'))   S.categoryMap[b.group_id] = b.memo || '';
+    if (bc.startsWith('meta_pause_')) { if (b.memo === '1') S.pausedMap[b.group_id] = true; else delete S.pausedMap[b.group_id]; }
   });
   // 購入履歴からも最新の入庫価格・店舗を補完（バーコードにない場合）
   const histPriceMap = {}, histStoreMap = {};
@@ -2091,6 +2095,17 @@ function bindAdd() {
     if (S.pausedMap[gid]) { delete S.pausedMap[gid]; } else { S.pausedMap[gid] = true; }
     try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
     const now = !!S.pausedMap[gid];
+    // サーバー同期（fire-and-forget）
+    if (S.url !== 'DEMO') {
+      const memoVal = now ? '1' : '';
+      const bcKey = `meta_pause_${gid}`;
+      apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal}).catch(()=>{});
+      if (S.cache) {
+        const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
+        if (ex) ex.memo = memoVal;
+        else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal, created_at:''});
+      }
+    }
     const btn  = document.getElementById('pause-toggle');
     const hint = document.getElementById('pause-hint');
     if (btn)  { btn.textContent = now ? '▶ 消費を再開する' : '⏸ 消費を一時停止する'; btn.style.borderColor = now ? 'var(--accent)' : 'var(--border)'; btn.style.color = now ? 'var(--accent)' : 'var(--muted)'; }
@@ -2185,15 +2200,27 @@ async function saveProduct() {
   const isEdit = !!S.editProduct;
   const gid = isEdit ? S.editProduct.group_id : `prod_${Date.now()}`;
 
-  // カテゴリをローカルに保存（サーバー不要）
+  // カテゴリをローカルとサーバーに保存（共有のため）
   const category = document.getElementById('a-category')?.value || '';
   if (category) { S.categoryMap[gid] = category; } else { delete S.categoryMap[gid]; }
   try { localStorage.setItem('stockr_categories', JSON.stringify(S.categoryMap)); } catch(e) {}
+  // サーバー同期（fire-and-forget）
+  const _saveMeta = async (bcKey, memoVal) => {
+    if (S.url === 'DEMO') return;
+    await apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal}).catch(()=>{});
+    if (S.cache) {
+      const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
+      if (ex) ex.memo = memoVal;
+      else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal, created_at:''});
+    }
+  };
+  _saveMeta(`meta_cat_${gid}`, category);
 
   // 消費日数モード以外に切り替えたら一時停止状態をクリア（無効な状態が残らないよう）
   if (alertMode !== 'days' && S.pausedMap[gid]) {
     delete S.pausedMap[gid];
     try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
+    _saveMeta(`meta_pause_${gid}`, '');
   }
 
   try {
