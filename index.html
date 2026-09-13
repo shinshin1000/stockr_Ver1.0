@@ -443,6 +443,7 @@ const S = {
   hidePriceOnly: false, // 価格のみ商品を非表示（ホーム）
   // 消費一時停止（group_id → true）
   pausedMap: JSON.parse(localStorage.getItem('stockr_paused') || '{}'),
+  pendingPauses: new Set(), // サーバー保存中のgid（bgRefreshとのレースコンディション防止）
 };
 
 // ============================================================
@@ -469,6 +470,27 @@ async function apiPost(body) {
 // ============================================================
 function saveShopFlags() {
   try { localStorage.setItem('stockr_shop_flags', JSON.stringify([...S.shopFlags])); } catch(e) {}
+}
+
+// ─── 消費一時停止のON/OFF（ローカル＋サーバー同期） ──────────────
+function setPaused(gid, paused) {
+  if (paused) { S.pausedMap[gid] = true; } else { delete S.pausedMap[gid]; }
+  try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
+  const memoVal = paused ? '1' : '';
+  const bcKey = `meta_pause_${gid}`;
+  // キャッシュを先に更新（サーバー保存前にbgRefreshで状態が上書きされるのを防ぐ）
+  if (S.cache) {
+    const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
+    if (ex) ex.memo = memoVal;
+    else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal, created_at:''});
+  }
+  // サーバー同期（pendingPausesでbgRefreshとのレースコンディション防止）
+  if (S.url !== 'DEMO') {
+    S.pendingPauses.add(gid);
+    apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal})
+      .catch(()=>{})
+      .finally(() => S.pendingPauses.delete(gid));
+  }
 }
 
 // ─── ローカルキャッシュ即時保存 ──────────────────────────────────
@@ -532,7 +554,9 @@ function buildProducts(data) {
     // カテゴリ・一時停止をサーバーデータで上書き同期（共有のため）
     const bc = String(b.barcode || '');
     if (bc.startsWith('meta_cat_'))   S.categoryMap[b.group_id] = b.memo || '';
-    if (bc.startsWith('meta_pause_')) { if (b.memo === '1') S.pausedMap[b.group_id] = true; else delete S.pausedMap[b.group_id]; }
+    // スプレッドシートは "1" を数値 1 に自動変換して返すため、文字列にそろえて比較する
+    // pendingPauses中はサーバーデータで上書きしない（bgRefreshとのレースコンディション防止）
+    if (bc.startsWith('meta_pause_') && !S.pendingPauses.has(b.group_id)) { if (String(b.memo) === '1') S.pausedMap[b.group_id] = true; else delete S.pausedMap[b.group_id]; }
   });
   // 購入履歴からも最新の入庫価格・店舗を補完（バーコードにない場合）
   const histPriceMap = {}, histStoreMap = {};
@@ -1387,6 +1411,7 @@ function paintHomeList() {
 
   } else {
     // ── 在庫モード HTML ───────────────────────────────────────────
+    const pausedCount = prods.filter(p => p.alert_mode === 'days' && S.pausedMap[p.group_id]).length;
     if (S.query) {
       const terms = S.query.toLowerCase().split(/\s+/).filter(Boolean);
       prods = prods.filter(p => {
@@ -1431,6 +1456,13 @@ function paintHomeList() {
         <span class="ab-icon">⚠️</span>
         <div class="ab-text">在庫アラート <strong>${low.length}件</strong> が少なくなっています</div>
         <span style="color:var(--warn)">›</span>
+      </div>`;
+    }
+    if (pausedCount && S.filterMode !== 'soon') {
+      html += `<div class="alert-banner" id="paused-banner" style="background:var(--surface2);border-color:var(--border);">
+        <span class="ab-icon">⏸</span>
+        <div class="ab-text">消費一時停止中 <strong style="color:var(--text);">${pausedCount}件</strong><span style="color:var(--muted);font-size:12px;">（タップで一覧・再開）</span></div>
+        <span style="color:var(--muted)">›</span>
       </div>`;
     }
     if (!prods.length) {
@@ -1482,6 +1514,9 @@ function paintHomeList() {
           </div>
           <div class="pi-btns">
             ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
+            ${!priceOnly && p.alert_mode === 'days'
+              ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" title="${isPaused?'消費を再開':'消費を一時停止'}" style="width:34px;height:26px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:13px;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'▶':'⏸'}</button>`
+              : ''}
             ${priceOnly
               ? `<button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加/外す"
                    style="background:${S.shopFlags.has(String(p.group_id))?'var(--accent)':'var(--surface2)'};border:1px solid ${S.shopFlags.has(String(p.group_id))?'var(--accent)':'var(--border)'};border-radius:8px;font-size:15px;cursor:pointer;padding:6px 10px;color:${S.shopFlags.has(String(p.group_id))?'var(--bg)':'var(--muted)'};">
@@ -1494,6 +1529,7 @@ function paintHomeList() {
       }).join('');
     }
     el.innerHTML = html;
+    document.getElementById('paused-banner')?.addEventListener('click', showPausedList);
     document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); if(document.getElementById('sort-btn')) document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; if(document.getElementById('q')) document.getElementById('q').value=''; paintHomeList(); });
   }
 
@@ -1518,6 +1554,14 @@ function paintHomeList() {
       const gid = e.target.closest('.shop-remove').dataset.gid;
       S.shopFlags.delete(gid); saveShopFlags(); paintHomeList(); return;
     }
+    if (e.target.closest('.pause-btn')) {
+      const gid = e.target.closest('.pause-btn').dataset.gid;
+      const current = !!S.pausedMap[gid];
+      setPaused(gid, !current);
+      paintHomeList();
+      toast(!current ? '⏸ 消費を一時停止しました' : '▶ 消費を再開しました');
+      return;
+    }
     if (e.target.closest('.shop-flag')) {
       const gid = e.target.closest('.shop-flag').dataset.gid;
       if (S.shopFlags.has(gid)) { S.shopFlags.delete(gid); } else { S.shopFlags.add(gid); }
@@ -1534,6 +1578,39 @@ function paintHomeList() {
     go('action', {activeProduct:p, actionMode: (S.viewMode==='shop' && p.track_stock) ? 'in' : 'out', actionInput:''});
   };
   el.addEventListener('click', el._clickHandler);
+}
+// 消費一時停止中の商品一覧（その場で再開できる）
+function showPausedList() {
+  const ov = document.createElement('div'); ov.className = 'overlay';
+  const renderList = () => {
+    const paused = buildProducts(S.cache)
+      .filter(p => p.alert_mode === 'days' && S.pausedMap[p.group_id])
+      .sort((a,b) => a.name.localeCompare(b.name,'ja'));
+    return paused.map(p => `
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 4px;border-bottom:1px solid var(--border);">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</div>
+          <div style="font-size:12px;color:var(--muted);">在庫 ${p.qty}${esc(p.unit)}</div>
+        </div>
+        <button class="btn btn-primary paused-resume" data-gid="${esc(p.group_id)}" style="width:auto;padding:9px 14px;font-size:13px;white-space:nowrap;">▶ 再開</button>
+      </div>`).join('') || '<p style="text-align:center;color:var(--muted);padding:16px;">一時停止中の商品はありません</p>';
+  };
+  ov.innerHTML = `<div class="modal"><div class="modal-handle"></div>
+    <h2 style="margin-bottom:4px;">⏸ 一時停止中の商品</h2>
+    <p class="form-hint" style="margin-bottom:12px;">「再開」を押すと、在庫が自動で減る計算がまた始まります</p>
+    <div id="paused-list" style="max-height:55vh;overflow-y:auto;">${renderList()}</div>
+    <button class="btn btn-secondary" id="paused-close" style="margin-top:8px;">閉じる</button>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', e => {
+    if (e.target.id === 'paused-close' || e.target === ov) { ov.remove(); return; }
+    const btn = e.target.closest('.paused-resume');
+    if (!btn) return;
+    setPaused(btn.dataset.gid, false);
+    toast('▶ 消費を再開しました');
+    document.getElementById('paused-list').innerHTML = renderList();
+    paintHomeList();
+  });
 }
 // 買い物モード: 商品を追加するモーダル
 function showShopAddModal(allProds) {
@@ -2112,20 +2189,8 @@ function bindAdd() {
   document.getElementById('pause-toggle')?.addEventListener('click', () => {
     const gid = S.editProduct?.group_id;
     if (!gid) return;
-    if (S.pausedMap[gid]) { delete S.pausedMap[gid]; } else { S.pausedMap[gid] = true; }
-    try { localStorage.setItem('stockr_paused', JSON.stringify(S.pausedMap)); } catch(e) {}
+    setPaused(gid, !S.pausedMap[gid]);
     const now = !!S.pausedMap[gid];
-    // サーバー同期（fire-and-forget）
-    if (S.url !== 'DEMO') {
-      const memoVal = now ? '1' : '';
-      const bcKey = `meta_pause_${gid}`;
-      apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal}).catch(()=>{});
-      if (S.cache) {
-        const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
-        if (ex) ex.memo = memoVal;
-        else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:memoVal, created_at:''});
-      }
-    }
     const btn  = document.getElementById('pause-toggle');
     const hint = document.getElementById('pause-hint');
     if (btn)  { btn.textContent = now ? '▶ 消費を再開する' : '⏸ 消費を一時停止する'; btn.style.borderColor = now ? 'var(--accent)' : 'var(--border)'; btn.style.color = now ? 'var(--accent)' : 'var(--muted)'; }
