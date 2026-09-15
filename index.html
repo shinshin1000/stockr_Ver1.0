@@ -493,6 +493,29 @@ function setPaused(gid, paused) {
   }
 }
 
+// ─── 起動時の一時停止同期（localStorageのみの状態をサーバーに送信） ──────
+function syncPausedToServer(serverBarcodes) {
+  if (S.url === 'DEMO') return;
+  const serverKeys = new Set((serverBarcodes || []).map(b => String(b.barcode)));
+  Object.keys(S.pausedMap).forEach(gid => {
+    if (!S.pausedMap[gid]) return;
+    const bcKey = `meta_pause_${gid}`;
+    if (serverKeys.has(bcKey)) return; // サーバーに既存 → スキップ
+    // localStorageのみ → サーバーに送信して共有化
+    S.pendingPauses.add(gid);
+    apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1'})
+      .then(() => {
+        if (S.cache) {
+          const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
+          if (ex) ex.memo = '1';
+          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1', created_at:''});
+        }
+      })
+      .catch(()=>{})
+      .finally(() => S.pendingPauses.delete(gid));
+  });
+}
+
 // ─── ローカルキャッシュ即時保存 ──────────────────────────────────
 function saveLocalCache() {
   try { localStorage.setItem('stockr_cache', JSON.stringify({data: S.cache, time: Date.now()})); } catch(e) {}
@@ -903,7 +926,7 @@ async function bindHome() {
   // 即時表示（キャッシュあり→即表示、なし→ローディング表示）
   paintHomeList();
   // バックグラウンドで最新データ取得
-  getAllData().then(d => { if (d?.ok) { S.cache = d; checkMultiUserUpdates(d); paintHomeList(); } });
+  getAllData().then(d => { if (d?.ok) { S.cache = d; checkMultiUserUpdates(d); paintHomeList(); syncPausedToServer(d.barcodes); } });
 }
 // ============================================================
 // PRICE RECORD (在庫増減なし・価格のみ記録)
