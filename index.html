@@ -179,13 +179,13 @@ input { font-family: inherit; }
   border-bottom: 1px solid var(--border);
 }
 .search-input {
-  flex: 1; background: var(--surface); border: 1.5px solid var(--border);
+  flex: 1; min-width: 0; background: var(--surface); border: 1.5px solid var(--border);
   border-radius: 10px; color: var(--text); padding: 9px 14px;
   font-size: 15px; outline: none; transition: border-color 0.15s;
 }
 .search-input:focus { border-color: var(--accent); }
 .sort-btn {
-  background: var(--surface); border: 1.5px solid var(--border); border-radius: 10px;
+  flex-shrink: 0; background: var(--surface); border: 1.5px solid var(--border); border-radius: 10px;
   color: var(--muted); padding: 9px 12px; font-size: 13px; white-space: nowrap;
 }
 
@@ -1525,7 +1525,7 @@ function paintHomeList() {
         const isNearOut = !priceOnly && !isPaused && p.alert_mode === 'days' && d !== null && d <= 30;
         const showLow = p.isLow || isNearOut;
         const daysHtml = isPaused
-          ? ` · <span style="color:var(--muted);">停止中</span>`
+          ? ` · <span style="color:var(--muted);">⏸ 停止中</span>`
           : (!priceOnly && d !== null) ? (() => { const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })() : '';
         const cycle = priceOnly ? null : calcPurchaseCycle(p);
         const cycleHtml = cycle && cycle.daysUntilDue < 0
@@ -1561,7 +1561,7 @@ function paintHomeList() {
           <div class="pi-btns">
             ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
             ${!priceOnly && p.alert_mode === 'days'
-              ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" style="width:34px;height:22px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:10px;font-weight:700;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'再開':'停止'}</button>`
+              ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" title="${isPaused?'消費を再開':'消費を一時停止'}" style="width:34px;height:26px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:13px;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'▶':'⏸'}</button>`
               : ''}
             ${priceOnly
               ? `<button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加/外す"
