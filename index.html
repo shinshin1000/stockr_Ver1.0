@@ -456,14 +456,27 @@ async function apiGet(action, params = {}) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-async function apiPost(body) {
-  const res = await fetch(S.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+async function apiPost(body, _retry = 2) {
+  let lastErr;
+  for (let i = 0; i <= _retry; i++) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 58000); // 58秒でタイムアウト
+      const res = await fetch(S.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    } catch(e) {
+      lastErr = e;
+      if (i < _retry) await new Promise(r => setTimeout(r, 3000 * (i + 1))); // 3s, 6s
+    }
+  }
+  throw lastErr;
 }
 // ============================================================
 // SHOP FLAGS
@@ -494,26 +507,27 @@ function setPaused(gid, paused) {
 }
 
 // ─── 起動時の一時停止同期（localStorageのみの状態をサーバーに送信） ──────
-function syncPausedToServer(serverBarcodes) {
+// 起動10秒後に順番に送信（コールドスタートが落ち着いてから・並列リクエスト回避）
+async function syncPausedToServer(serverBarcodes) {
   if (S.url === 'DEMO') return;
   const serverKeys = new Set((serverBarcodes || []).map(b => String(b.barcode)));
-  Object.keys(S.pausedMap).forEach(gid => {
-    if (!S.pausedMap[gid]) return;
+  const toSync = Object.keys(S.pausedMap).filter(gid => S.pausedMap[gid] && !serverKeys.has(`meta_pause_${gid}`));
+  if (!toSync.length) return;
+  await new Promise(r => setTimeout(r, 10000)); // GASコールドスタート後に送信
+  for (const gid of toSync) {
     const bcKey = `meta_pause_${gid}`;
-    if (serverKeys.has(bcKey)) return; // サーバーに既存 → スキップ
-    // localStorageのみ → サーバーに送信して共有化
     S.pendingPauses.add(gid);
-    apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1'})
-      .then(() => {
-        if (S.cache) {
-          const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
-          if (ex) ex.memo = '1';
-          else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1', created_at:''});
-        }
-      })
-      .catch(()=>{})
-      .finally(() => S.pendingPauses.delete(gid));
-  });
+    try {
+      await apiPost({action:'upsertBarcode', barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1'}, 1);
+      if (S.cache) {
+        const ex = (S.cache.barcodes||[]).find(b=>b.barcode===bcKey);
+        if (ex) ex.memo = '1';
+        else (S.cache.barcodes=S.cache.barcodes||[]).push({barcode:bcKey, group_id:gid, store_name:'', price:'', memo:'1', created_at:''});
+      }
+    } catch(e) { /* silent */ }
+    S.pendingPauses.delete(gid);
+    await new Promise(r => setTimeout(r, 500)); // 次のリクエストまで0.5秒待つ
+  }
 }
 
 // ─── ローカルキャッシュ即時保存 ──────────────────────────────────
