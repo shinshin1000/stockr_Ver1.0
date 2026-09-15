@@ -411,7 +411,7 @@ const S = {
   theme:      localStorage.getItem('stockr_theme')        || 'dark',
   screen: 'home',
   query:  '',
-  filterMode: '', // '' = 全件 / 'soon' = 20日以内
+  filterMode: '', // '' = 全件 / 'soon' = 30日以内
   histFilter: 'all',
   histSearch: '',
   // Stock action
@@ -880,7 +880,7 @@ function renderHome() {
       <input class="search-input" id="q" type="search" placeholder="🔍 検索（スペースで複数キーワード）" value="${esc(S.query)}">
       <button class="sort-btn" id="sort-btn">${sortLabel()}</button>
       <button class="sort-btn" id="shop-list-btn" title="店舗別買い物リスト" style="font-size:16px;padding:9px 10px;">🗺</button>
-      <button class="sort-btn" id="soon-btn" title="20日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
+      <button class="sort-btn" id="soon-btn" title="30日以内に切れる商品" style="font-size:16px;padding:9px 10px;${S.filterMode==='soon'?'background:var(--warn);color:var(--bg);border-color:var(--warn);':''}">⏰</button>
     </div>
     <div id="cat-filter-row" style="display:flex;gap:6px;padding:6px 12px 4px;flex-wrap:wrap;border-bottom:1px solid var(--border);">
       <button class="unit-pill cf-pill ${!S.categoryFilter?'active':''}" data-cat="" style="padding:5px 14px;font-size:13px;">すべて</button>
@@ -1371,7 +1371,7 @@ function paintHomeList() {
       if (!p.track_stock) return false;
       if (p.isLow) return true;
       const dr = calcDaysRemaining(p);
-      return dr !== null && dr <= 20;
+      return dr !== null && dr <= 30;
     });
     // 買い物モードでもカテゴリフィルターを適用（手動追加済みはフィルター対象外）
     if (S.categoryFilter) {
@@ -1461,7 +1461,7 @@ function paintHomeList() {
         if (!p.track_stock) return false;
         if (p.isLow) return true;  // しきい値モードで在庫少
         const d = calcConsumptionStats(p).bestDays;
-        return d !== null && d <= 20;  // 消費日数モードで20日以内
+        return d !== null && d <= 30;  // 消費日数モードで30日以内
       });
       prods.sort((a,b) => (calcConsumptionStats(a).bestDays??999) - (calcConsumptionStats(b).bestDays??999));
     } else {
@@ -1479,11 +1479,17 @@ function paintHomeList() {
     if (S.hidePriceOnly) {
       prods = prods.filter(p => p.track_stock);
     }
-    const low = prods.filter(p=>p.isLow);
+    // しきい値モードの在庫不足 ＋ 消費日数モードで30日以内も含む
+    const low = prods.filter(p => {
+      if (p.isLow) return true;
+      if (!p.track_stock || p.alert_mode !== 'days' || S.pausedMap[p.group_id]) return false;
+      const d = calcConsumptionStats(p).bestDays;
+      return d !== null && d <= 30;
+    });
     let html = '';
     if (S.filterMode === 'soon') {
       html += `<div style="display:flex;align-items:center;gap:8px;padding:6px 4px 10px;">
-        <span style="background:var(--warn);color:var(--bg);font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;">⏰ 20日以内</span>
+        <span style="background:var(--warn);color:var(--bg);font-size:12px;font-weight:700;padding:4px 12px;border-radius:20px;">⏰ 30日以内</span>
         <span style="font-size:12px;color:var(--muted);">${prods.length}件</span>
         <button id="clear-filter" style="margin-left:auto;font-size:12px;color:var(--muted);background:none;border:1px solid var(--border);border-radius:8px;cursor:pointer;padding:4px 10px;">✕ 解除</button>
       </div>`;
@@ -1515,8 +1521,11 @@ function paintHomeList() {
         const stats = calcConsumptionStats(p);
         const d = stats.bestDays;
         const isPaused = p.alert_mode === 'days' && !!S.pausedMap[p.group_id];
+        // 消費日数モードで30日以内も在庫アラート扱い（しきい値モードのisLowと統合）
+        const isNearOut = !priceOnly && !isPaused && p.alert_mode === 'days' && d !== null && d <= 30;
+        const showLow = p.isLow || isNearOut;
         const daysHtml = isPaused
-          ? ` · <span style="color:var(--muted);">⏸ 停止中</span>`
+          ? ` · <span style="color:var(--muted);">停止中</span>`
           : (!priceOnly && d !== null) ? (() => { const col = d < 7 ? 'var(--danger)' : d < 30 ? 'var(--warn)' : 'var(--accent)'; return ` · <span style="color:${col};">あと約${d}日</span>`; })() : '';
         const cycle = priceOnly ? null : calcPurchaseCycle(p);
         const cycleHtml = cycle && cycle.daysUntilDue < 0
@@ -1525,11 +1534,11 @@ function paintHomeList() {
             ? ` · <span style="color:var(--warn);">📅 あと${cycle.daysUntilDue}日で次回</span>`
             : '');
         return `
-        <div class="product-item ${p.isLow?'low':''}" data-gid="${esc(p.group_id)}">
+        <div class="product-item ${showLow?'low':''}" data-gid="${esc(p.group_id)}">
           <div class="pi-info">
             <div class="pi-name">
               ${esc(p.name)}
-              ${p.isLow ? '<span class="alert-badge">少</span>' : ''}
+              ${p.isLow ? '<span class="alert-badge">少</span>' : isNearOut ? `<span class="alert-badge" style="background:var(--warn);">${d}日</span>` : ''}
               ${priceOnly ? '<span class="alert-badge" style="background:var(--surface2);color:var(--muted);border:1px solid var(--border);">価格</span>' : ''}
             </div>
             <div class="pi-meta">
@@ -1544,7 +1553,7 @@ function paintHomeList() {
           <div class="pi-qty-wrap">
             ${priceOnly
               ? `<div class="pi-qty" style="font-size:13px;color:var(--muted);">💰</div><div class="pi-unit">価格</div>`
-              : `<div class="pi-qty ${p.isLow?'low':''}" style="${p.virtualQty!==null?'font-size:18px;':''}">
+              : `<div class="pi-qty ${showLow?'low':''}" style="${p.virtualQty!==null?'font-size:18px;':''}">
                   ${p.virtualQty !== null ? p.displayQty.toFixed(1) : p.qty}
                 </div>
                 <div class="pi-unit">${esc(p.unit)}${p.virtualQty!==null?'<span style="font-size:9px;color:var(--warn);display:block;line-height:1;">推定</span>':''}</div>`}
@@ -1552,7 +1561,7 @@ function paintHomeList() {
           <div class="pi-btns">
             ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
             ${!priceOnly && p.alert_mode === 'days'
-              ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" title="${isPaused?'消費を再開':'消費を一時停止'}" style="width:34px;height:26px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:13px;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'▶':'⏸'}</button>`
+              ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" style="width:34px;height:22px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:10px;font-weight:700;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'再開':'停止'}</button>`
               : ''}
             ${priceOnly
               ? `<button class="shop-flag" data-gid="${p.group_id}" title="買い物リストに追加/外す"
@@ -1567,7 +1576,12 @@ function paintHomeList() {
     }
     el.innerHTML = html;
     document.getElementById('paused-banner')?.addEventListener('click', showPausedList);
-    document.getElementById('ab')?.addEventListener('click', () => { S.sort='qty_asc'; localStorage.setItem('stockr_sort','qty_asc'); if(document.getElementById('sort-btn')) document.getElementById('sort-btn').textContent=sortLabel(); S.query=''; if(document.getElementById('q')) document.getElementById('q').value=''; paintHomeList(); });
+    document.getElementById('ab')?.addEventListener('click', () => {
+      S.filterMode = 'soon';
+      const btn = document.getElementById('soon-btn');
+      if (btn) btn.style.cssText = 'font-size:16px;padding:9px 10px;background:var(--warn);color:var(--bg);border-color:var(--warn);';
+      paintHomeList();
+    });
   }
 
   // ── 共通イベントデリゲーション（両モードで必ず実行） ─────────
