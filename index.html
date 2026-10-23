@@ -1556,10 +1556,10 @@ function paintHomeList() {
               : `<div class="pi-qty ${showLow?'low':''}" style="${p.virtualQty!==null?'font-size:18px;':''}">
                   ${p.virtualQty !== null ? p.displayQty.toFixed(1) : p.qty}
                 </div>
-                <div class="pi-unit">${esc(p.unit)}${p.virtualQty!==null?'<span style="font-size:9px;color:var(--warn);display:block;line-height:1;">推定</span>':''}</div>`}
+                <div class="pi-unit">${esc(p.unit)}${p.virtualQty!==null?'<span style="font-size:9px;color:var(--accent);display:block;line-height:1;">自動</span>':''}</div>`}
           </div>
           <div class="pi-btns">
-            ${priceOnly ? '' : '<button class="qbtn qp" title="+1">＋</button><button class="qbtn qm" title="-1">－</button>'}
+            ${priceOnly ? '' : `<button class="qbtn qp" title="${p.alert_mode==='days'?'入庫（購入時に押す）':'+1'}">＋</button>${p.alert_mode !== 'days' ? '<button class="qbtn qm" title="-1">－</button>' : ''}`}
             ${!priceOnly && p.alert_mode === 'days'
               ? `<button class="pause-btn" data-gid="${esc(p.group_id)}" title="${isPaused?'消費を再開':'消費を一時停止'}" style="width:34px;height:26px;border-radius:7px;border:1.5px solid ${isPaused?'var(--accent)':'var(--border)'};background:${isPaused?'var(--accent-tint)':'var(--surface2)'};font-size:13px;cursor:pointer;color:${isPaused?'var(--accent)':'var(--muted)'};">${isPaused?'▶':'⏸'}</button>`
               : ''}
