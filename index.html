@@ -1807,9 +1807,10 @@ function renderAction() {
 
   // 消費日数表示
   const stats = calcConsumptionStats(p);
+  const dispQty = p.virtualQty !== null ? p.displayQty : p.qty; // 自動計算後の表示値
   let daysInfo = '';
   if (p.alert_mode === 'days' && (stats.bestDays !== null || p.manual_days_per_unit > 0)) {
-    const manualDays = p.manual_days_per_unit > 0 ? Math.round(p.qty * p.manual_days_per_unit) : null;
+    const manualDays = p.manual_days_per_unit > 0 ? Math.round(dispQty * p.manual_days_per_unit) : null;
     const estDays = stats.bestDays;
     daysInfo = `<div class="qa" style="background:var(--accent-tint-weak);color:var(--accent);">📅 残り推定: ${manualDays??estDays??'?'} 日${manualDays && estDays ? ` （実績: ${estDays}日）` : ''}</div>`;
   }
@@ -1817,8 +1818,8 @@ function renderAction() {
   return `
     <div class="action-wrap">
       <div class="qty-display">
-        <div class="ql">現在の在庫</div>
-        <div class="qn" id="cur-qty-disp">${p.qty}</div>
+        <div class="ql">現在の在庫${p.virtualQty !== null ? ' <span style="font-size:11px;color:var(--accent);">（自動計算）</span>' : ''}</div>
+        <div class="qn" id="cur-qty-disp">${p.virtualQty !== null ? p.displayQty.toFixed(1) : p.qty}</div>
         <div class="qu">${esc(p.unit)}</div>
         ${p.isLow ? `<div class="qa">⚠️ アラートしきい値（${p.alert_threshold}${esc(p.unit)}）以下です</div>` : ''}
         ${daysInfo}
@@ -2302,8 +2303,9 @@ function bindAdd() {
 
   // 容量変更時の在庫換算プレビュー（編集モードかつ既存在庫あり）
   const ep = S.editProduct;
-  if (ep && Number(ep.volume) > 0 && ep.qty > 0) {
-    const oldVol = Number(ep.volume), oldQty = ep.qty;
+  const epQty = ep ? (ep.virtualQty !== null ? ep.displayQty : ep.qty) : 0; // 自動消費後の値を使う
+  if (ep && Number(ep.volume) > 0 && epQty > 0) {
+    const oldVol = Number(ep.volume), oldQty = epQty;
     document.getElementById('a-vol')?.addEventListener('input', e => {
       const newVol = parseFloat(e.target.value) || 0;
       const hint = document.getElementById('vol-recalc-hint');
@@ -2371,7 +2373,8 @@ async function saveProduct() {
     if (S.url==='DEMO') {
       if (isEdit) {
         const oldVol = Number(S.editProduct.volume) || 0;
-        const oldQty = S.editProduct.qty || 0;
+        const _epD   = S.editProduct;
+        const oldQty = _epD ? (_epD.virtualQty !== null ? _epD.displayQty : _epD.qty) : 0;
         const p = S.cache.products.find(x=>x.group_id===gid);
         if (p) { p.name=name; p.unit=unit; p.volume=volume; p.volume_unit=volUnit; p.track_stock=trackStock; p.manual_days_per_unit=manualDays; }
         const inv = S.cache.inventory.find(x=>x.group_id===gid);
@@ -2398,7 +2401,8 @@ async function saveProduct() {
     const initPrice  = document.getElementById('a-init-price')?.value?.trim() || '';
     const initStore  = document.getElementById('a-init-store')?.value?.trim() || '';
     const oldVol     = Number(S.editProduct?.volume) || 0;
-    const oldQty     = S.editProduct?.qty || 0;
+    const _ep        = S.editProduct;
+    const oldQty     = _ep ? (_ep.virtualQty !== null ? _ep.displayQty : _ep.qty) : 0;
 
     // 楽観的更新：即座にローカルキャッシュを更新してホームへ戻る
     const prevProducts = JSON.parse(JSON.stringify(S.cache?.products||[]));
